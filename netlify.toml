@@ -14,7 +14,4 @@
 
 [functions]
   node_bundler = "esbuild"
-  external_node_modules = ["pdfplumber", "pandas", "numpy", "openpyxl"]
-
-[[plugins]]
-  package = "@netlify/plugin-python" 
+  external_node_modules = ["pdfplumber", "pandas", "numpy", "openpyxl"] 
