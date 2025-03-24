@@ -4,6 +4,6 @@
   "description": "PDF to Excel converter web application",
   "dependencies": {},
   "devDependencies": {
-    "@netlify/plugin-python": "^1.0.0"
+    "@netlify/plugin-python": "1.0.0"
   }
 } 
