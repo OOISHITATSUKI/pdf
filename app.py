@@ -16,6 +16,36 @@ st.markdown("""
 <style>
     .main {
         background-color: #ffffff;
+        padding: 0;
+    }
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
+    }
+    .preview-box {
+        background-color: #ffffff;
+        border: 1px solid #eee;
+        border-radius: 5px;
+        min-height: 400px;
+        margin-top: 0;
+        padding: 10px;
+    }
+    .stDataFrame {
+        width: 100%;
+    }
+    div[data-testid="stDataFrame"] > div {
+        width: 100%;
+    }
+    .dataframe {
+        width: 100%;
+    }
+    thead tr th {
+        background-color: #f8f9fa;
+    }
+    tbody tr:nth-child(even) {
+        background-color: #f8f9fa;
     }
     .stButton>button {
         background-color: #8D9DA2;
@@ -46,12 +76,6 @@ st.markdown("""
         color: #333;
         margin-bottom: 20px;
     }
-    .preview-box {
-        background-color: #f8f9fa;
-        padding: 20px;
-        border-radius: 10px;
-        min-height: 400px;
-    }
     .ad-space {
         background-color: #f8f9fa;
         padding: 20px;
@@ -74,83 +98,69 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# メインコンテンツ
+# メインレイアウト
 st.title("PDF to Excel 変換ツール")
 st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。", unsafe_allow_html=True)
 
-# 2列レイアウト
-col1, col2 = st.columns([1, 1])
+# ファイルアップロード部分
+uploaded_file = st.file_uploader("PDFファイルを選択してください", type=['pdf'])
 
-with col1:
-    st.markdown("### 変換設定")
+# プレビュー表示（上部に配置）
+if uploaded_file is not None:
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_path = tmp_file.name
+
+        with pdfplumber.open(tmp_path) as pdf:
+            tables = []
+            for page in pdf.pages:
+                table = page.extract_table()
+                if table:
+                    tables.extend(table)
+
+            if tables:
+                df = pd.DataFrame(tables[1:], columns=tables[0])
+                st.markdown("### プレビュー")
+                st.dataframe(df, use_container_width=True)
+                
+                # Excelファイルの作成とダウンロードボタン
+                excel_file = 'converted_data.xlsx'
+                df.to_excel(excel_file, index=False)
+                
+                with open(excel_file, 'rb') as f:
+                    st.download_button(
+                        label="📥 Excelファイルをダウンロード",
+                        data=f,
+                        file_name='converted_data.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
+                os.remove(excel_file)
+            else:
+                st.warning("テーブルデータが見つかりませんでした。")
+    except Exception as e:
+        st.error("エラーが発生しました。PDFの形式を確認してください。")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+else:
+    st.markdown("PDFファイルをアップロードするとここにプレビューが表示されます")
+
+# サポート情報（下部に配置）
+with st.expander("📌 サポート対象PDFについて"):
+    st.markdown("""
+    ### 対応PDFの種類
+    - ✅ 表形式のデータを含むPDF
+    - ✅ 通常のテキストデータを含むPDF
+    - ✅ 複合的なコンテンツを含むPDF
     
-    # ファイルアップロードエリア
-    st.markdown('<div class="upload-box">', unsafe_allow_html=True)
-    uploaded_file = st.file_uploader("", type=['pdf'])
-    if not uploaded_file:
-        st.markdown('📄<br>クリックまたはドラッグ＆ドロップでPDFファイルを選択', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    if uploaded_file:
-        st.button("Excelに変換する")
-    
-    # サポート情報
-    with st.expander("📌 サポート対象PDFについて"):
-        st.markdown("""
-        - テキストが含まれるPDF
-        - 表形式のデータが含まれるPDF
-        - シンプルな表構造のPDFが最適
-        - セル結合が少ないPDFの方が良好な結果が得られます
-        """)
-    
-    # 広告スペース1
-    st.markdown('<div class="ad-space">広告スペース 1</div>', unsafe_allow_html=True)
+    ### 注意事項
+    - ⚠️ スキャンされたPDFや画像化されたPDFは変換できない場合があります
+    - ⚠️ パスワード保護されたPDFは処理できません
+    """)
 
-with col2:
-    st.markdown("### プレビュー")
-    st.markdown('<div class="preview-box">', unsafe_allow_html=True)
-    if not uploaded_file:
-        st.markdown("PDFファイルをアップロードするとここにプレビューが表示されます")
-    else:
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                tmp_path = tmp_file.name
-
-            with pdfplumber.open(tmp_path) as pdf:
-                tables = []
-                for page in pdf.pages:
-                    table = page.extract_table()
-                    if table:
-                        tables.extend(table)
-
-                if tables:
-                    df = pd.DataFrame(tables[1:], columns=tables[0])
-                    st.dataframe(df)
-                    
-                    # Excelファイルとして出力
-                    excel_file = 'converted_data.xlsx'
-                    df.to_excel(excel_file, index=False)
-                    
-                    with open(excel_file, 'rb') as f:
-                        st.download_button(
-                            label="📥 Excelファイルをダウンロード",
-                            data=f,
-                            file_name='converted_data.xlsx',
-                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                        )
-                    os.remove(excel_file)
-                else:
-                    st.warning("テーブルデータが見つかりませんでした。")
-        except Exception as e:
-            st.error("エラーが発生しました。PDFの形式を確認してください。")
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # 広告スペース2
-    st.markdown('<div class="ad-space">広告スペース 2</div>', unsafe_allow_html=True)
+# 広告スペース（最下部に配置）
+st.markdown('<div class="ad-space">広告スペース</div>', unsafe_allow_html=True)
 
 # フッター
 st.markdown("""
