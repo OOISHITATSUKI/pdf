@@ -1,142 +1,131 @@
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, request, jsonify, send_file
 import pdfplumber
 import pandas as pd
 import os
-from werkzeug.utils import secure_filename
 import tempfile
+from werkzeug.utils import secure_filename
+import logging
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max-limit
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB制限
+app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()  # システムの一時ディレクトリを使用
 
-# アップロードフォルダが存在しない場合は作成
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+# ロギングの設定
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-ALLOWED_EXTENSIONS = {'pdf'}
-
-# アップロードされたファイルの一時保存ディレクトリ
-UPLOAD_FOLDER = 'temp'
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def convert_pdf_to_excel(pdf_path):
-    all_tables = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            tables = page.extract_tables()
-            if tables:
-                all_tables.extend(tables)
-    
-    if not all_tables:
+def extract_table_from_pdf(pdf_path):
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            # 最初のページから表を抽出
+            first_page = pdf.pages[0]
+            table = first_page.extract_table()
+            
+            if table is None:
+                return None
+            
+            # ヘッダー行を取得
+            headers = table[0]
+            
+            # データ行を取得
+            data = table[1:]
+            
+            # DataFrameを作成
+            df = pd.DataFrame(data, columns=headers)
+            return df
+    except Exception as e:
+        logger.error(f"PDFからの表抽出中にエラーが発生しました: {str(e)}")
         return None
-    
-    # 最初のテーブルをDataFrameに変換
-    df = pd.DataFrame(all_tables[0])
-    return df
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return app.send_static_file('index.html')
 
 @app.route('/preview', methods=['POST'])
-def preview_pdf():
-    if 'file' not in request.files:
-        return jsonify({'error': 'ファイルがアップロードされていません'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'ファイルが選択されていません'}), 400
-    
-    if not file.filename.endswith('.pdf'):
-        return jsonify({'error': 'PDFファイルのみ対応しています'}), 400
-
+def preview():
     try:
-        # 一時ファイルとして保存
-        temp_path = os.path.join(UPLOAD_FOLDER, secure_filename(file.filename))
-        file.save(temp_path)
+        if 'file' not in request.files:
+            return jsonify({'error': 'ファイルがアップロードされていません'}), 400
         
-        # PDFからテーブルを抽出
-        with pdfplumber.open(temp_path) as pdf:
-            # 最初のページからテーブルを抽出
-            first_page = pdf.pages[0]
-            tables = first_page.extract_tables()
-            
-            if not tables:
-                return jsonify({'error': 'テーブルが見つかりませんでした'}), 400
-            
-            # 最初のテーブルを使用
-            table = tables[0]
-            
-            # ヘッダーとデータを分離
-            headers = table[0]
-            data = table[1:6]  # 最初の5行のみを表示
-            
-            # 一時ファイルを削除
-            os.remove(temp_path)
-            
-            return jsonify({
-                'headers': headers,
-                'data': data
-            })
-            
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'ファイルが選択されていません'}), 400
+        
+        if not file.filename.endswith('.pdf'):
+            return jsonify({'error': 'PDFファイルのみ対応しています'}), 400
+        
+        # ファイルを一時的に保存
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        # 表を抽出
+        df = extract_table_from_pdf(filepath)
+        
+        # 一時ファイルを削除
+        os.remove(filepath)
+        
+        if df is None:
+            return jsonify({'error': '表が見つかりませんでした'}), 400
+        
+        # データをJSONに変換
+        data = {
+            'headers': df.columns.tolist(),
+            'rows': df.values.tolist()
+        }
+        
+        return jsonify(data)
     except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"プレビュー生成中にエラーが発生しました: {str(e)}")
+        return jsonify({'error': 'プレビューの生成に失敗しました'}), 500
 
 @app.route('/convert', methods=['POST'])
-def convert_pdf():
-    if 'file' not in request.files:
-        return 'ファイルがアップロードされていません', 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return 'ファイルが選択されていません', 400
-    
-    if not file.filename.endswith('.pdf'):
-        return 'PDFファイルのみ対応しています', 400
-
+def convert():
     try:
-        # 一時ファイルとして保存
-        temp_path = os.path.join(UPLOAD_FOLDER, secure_filename(file.filename))
-        file.save(temp_path)
+        if 'file' not in request.files:
+            return jsonify({'error': 'ファイルがアップロードされていません'}), 400
         
-        # PDFからテーブルを抽出
-        with pdfplumber.open(temp_path) as pdf:
-            # 最初のページからテーブルを抽出
-            first_page = pdf.pages[0]
-            tables = first_page.extract_tables()
-            
-            if not tables:
-                return 'テーブルが見つかりませんでした', 400
-            
-            # 最初のテーブルを使用
-            table = tables[0]
-            
-            # DataFrameに変換
-            df = pd.DataFrame(table[1:], columns=table[0])
-            
-            # Excelファイルとして保存
-            excel_path = os.path.join(UPLOAD_FOLDER, os.path.splitext(file.filename)[0] + '.xlsx')
-            df.to_excel(excel_path, index=False)
-            
-            # 一時ファイルを削除
-            os.remove(temp_path)
-            
-            # Excelファイルを送信
-            return send_file(
-                excel_path,
-                as_attachment=True,
-                download_name=os.path.splitext(file.filename)[0] + '.xlsx'
-            )
-            
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'ファイルが選択されていません'}), 400
+        
+        if not file.filename.endswith('.pdf'):
+            return jsonify({'error': 'PDFファイルのみ対応しています'}), 400
+        
+        # ファイルを一時的に保存
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        # 表を抽出
+        df = extract_table_from_pdf(filepath)
+        
+        # 一時ファイルを削除
+        os.remove(filepath)
+        
+        if df is None:
+            return jsonify({'error': '表が見つかりませんでした'}), 400
+        
+        # Excelファイルを生成
+        excel_filename = os.path.splitext(filename)[0] + '.xlsx'
+        excel_path = os.path.join(app.config['UPLOAD_FOLDER'], excel_filename)
+        df.to_excel(excel_path, index=False)
+        
+        # ファイルを送信
+        response = send_file(
+            excel_path,
+            as_attachment=True,
+            download_name=excel_filename,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        
+        # 一時ファイルを削除
+        os.remove(excel_path)
+        
+        return response
     except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return str(e), 500
+        logger.error(f"変換中にエラーが発生しました: {str(e)}")
+        return jsonify({'error': '変換に失敗しました'}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True) 
+    app.run(debug=True, port=5001) 
