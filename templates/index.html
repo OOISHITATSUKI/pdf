@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF to Excel 変換ツール</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4361ee;
+            --secondary-color: #2b2d42;
+            --accent-color: #4895ef;
+            --background-color: #f8f9fa;
+            --border-color: #e9ecef;
+            --text-color: #2b2d42;
+            --button-color: #4361ee;
+            --button-hover: #3046c9;
+            --card-background: #ffffff;
+            --title-gradient: linear-gradient(135deg, #4361ee, #4895ef);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Noto Sans JP', sans-serif;
+            background-color: var(--background-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 0 20px;
+        }
+
+        .site-title {
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 16px;
+            background: var(--title-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .site-description {
+            font-size: 1.1em;
+            color: var(--secondary-color);
+            max-width: 600px;
+            margin: 0 auto;
+            opacity: 0.8;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: minmax(300px, 2fr) 3fr;
+            gap: 40px;
+            align-items: start;
+        }
+
+        .section {
+            background: var(--card-background);
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        .section.preview-section {
+            position: sticky;
+            top: 20px;
+            height: calc(100vh - 120px);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .section-title {
+            font-size: 20px;
+            font-weight: 500;
+            margin-bottom: 30px;
+            color: var(--secondary-color);
+            position: relative;
+            display: inline-block;
+        }
+
+        .section-title::after {
+            content: '';
+            position: absolute;
+            bottom: -8px;
+            left: 0;
+            width: 40px;
+            height: 3px;
+            background: var(--title-gradient);
+            border-radius: 2px;
+        }
+
+        .upload-area {
+            border: 2px dashed var(--border-color);
+            border-radius: 12px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            margin-bottom: 20px;
+            position: relative;
+            transition: all 0.3s ease;
+            background: var(--background-color);
+        }
+
+        .upload-area:hover {
+            border-color: var(--primary-color);
+            background: #f8f9fa;
+            transform: translateY(-2px);
+        }
+
+        .upload-icon {
+            color: var(--primary-color);
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .upload-text {
+            color: var(--text-color);
+            font-size: 14px;
+        }
+
+        .convert-button {
+            background: var(--button-color);
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 500;
+            width: auto;
+            display: inline-block;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(67, 97, 238, 0.2);
+        }
+
+        .convert-button:hover {
+            background: var(--button-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(67, 97, 238, 0.3);
+        }
+
+        .support-link {
+            display: flex;
+            align-items: center;
+            color: var(--primary-color);
+            text-decoration: none;
+            font-size: 14px;
+            margin-top: 20px;
+            transition: color 0.3s ease;
+        }
+
+        .support-link:hover {
+            color: var(--button-hover);
+        }
+
+        .support-link svg {
+            margin-right: 8px;
+        }
+
+        .preview-area {
+            background: var(--background-color);
+            border-radius: 12px;
+            padding: 20px;
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: auto;
+            color: #666;
+            font-size: 14px;
+        }
+
+        .preview-area.empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: #999;
+        }
+
+        .preview-area::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        .preview-area::-webkit-scrollbar-track {
+            background: var(--background-color);
+            border-radius: 4px;
+        }
+
+        .preview-area::-webkit-scrollbar-thumb {
+            background: var(--accent-color);
+            border-radius: 4px;
+            border: 2px solid var(--background-color);
+        }
+
+        .preview-area::-webkit-scrollbar-thumb:hover {
+            background: var(--primary-color);
+        }
+
+        .preview-area::-webkit-scrollbar-corner {
+            background: var(--background-color);
+        }
+
+        .preview-table-wrapper {
+            min-width: 100%;
+            overflow-x: auto;
+        }
+
+        .preview-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            white-space: nowrap;
+        }
+
+        .preview-table th,
+        .preview-table td {
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            text-align: left;
+            background: var(--card-background);
+            min-width: 100px;
+        }
+
+        .preview-table th {
+            position: sticky;
+            top: 0;
+            background: var(--card-background);
+            color: var(--secondary-color);
+            font-weight: 500;
+            z-index: 1;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .preview-table tr:hover td {
+            background: #f8f9fa;
+        }
+
+        .ad-space {
+            margin-top: 40px;
+            padding: 20px;
+            background: var(--background-color);
+            border-radius: 12px;
+            text-align: center;
+            color: #666;
+        }
+
+        .support-info {
+            margin-top: 40px;
+            padding: 24px;
+            background: var(--card-background);
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .support-info h3 {
+            color: var(--secondary-color);
+            font-size: 16px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        .support-info-section {
+            margin-bottom: 24px;
+        }
+
+        .support-info-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .support-info ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .support-info li {
+            position: relative;
+            padding-left: 20px;
+            margin-bottom: 8px;
+            line-height: 1.6;
+            font-size: 14px;
+        }
+
+        .support-info li::before {
+            content: "•";
+            position: absolute;
+            left: 0;
+            color: var(--primary-color);
+        }
+
+        .support-info-section h4 {
+            color: var(--secondary-color);
+            font-size: 15px;
+            margin-bottom: 12px;
+            font-weight: 500;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+
+            .section.preview-section {
+                position: static;
+                height: 500px;
+            }
+
+            body {
+                padding: 20px 16px;
+            }
+
+            .site-title {
+                font-size: 2em;
+            }
+
+            .site-description {
+                font-size: 1em;
+            }
+
+            .section {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1 class="site-title">PDF to Excel 変換ツール</h1>
+        <p class="site-description">PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。</p>
+    </header>
+
+    <div class="container">
+        <div class="section">
+            <h2 class="section-title">変換設定</h2>
+            <form id="uploadForm" action="/convert" method="post" enctype="multipart/form-data">
+                <div class="upload-area" id="dropZone">
+                    <input type="file" name="file" id="file" style="display: none;" accept=".pdf" required>
+                    <div class="upload-icon">📄</div>
+                    <div class="upload-text">クリックまたはドラッグ＆ドロップでPDFファイルを選択</div>
+                </div>
+                <button type="submit" class="convert-button">Excelに変換する</button>
+                <a href="#" class="support-link">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M8 0C3.6 0 0 3.6 0 8C0 12.4 3.6 16 8 16C12.4 16 16 12.4 16 8C16 3.6 12.4 0 8 0ZM8 14C4.7 14 2 11.3 2 8C2 4.7 4.7 2 8 2C11.3 2 14 4.7 14 8C14 11.3 11.3 14 8 14Z" fill="currentColor"/>
+                        <path d="M8 4V12M8 12L12 8M8 12L4 8" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                    サポート対象PDFについて
+                </a>
+            </form>
+            <div class="ad-space">広告スペース 1</div>
+            <div class="ad-space">広告スペース 2</div>
+
+            <div class="support-info">
+                <h3>対応PDFについて</h3>
+                <div class="support-info-section">
+                    <h4>対応PDFの種類</h4>
+                    <ul>
+                        <li>テキストが含まれるPDF（画像化されたPDFは変換精度が下がります）</li>
+                        <li>表形式のデータが含まれるPDF</li>
+                        <li>複雑なレイアウトは正確に変換できない場合があります</li>
+                    </ul>
+                </div>
+                <div class="support-info-section">
+                    <h4>変換のヒント</h4>
+                    <ul>
+                        <li>シンプルな表構造のPDFが最適です</li>
+                        <li>セル結合が少ないPDFの方が良好な結果が得られます</li>
+                        <li>変換に失敗する場合は、PDFの品質や互換性に問題がある可能性があります</li>
+                    </ul>
+                </div>
+                <div class="support-info-section">
+                    <h4>対応できるPDFの容量について</h4>
+                    <ul>
+                        <li>ファイルサイズは16MB以下にしてください</li>
+                        <li>大きなファイルは変換に時間がかかる場合があります</li>
+                        <li>複数ページのPDFにも対応していますが、処理時間が長くなる可能性があります</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="section preview-section">
+            <h2 class="section-title">プレビュー</h2>
+            <div class="preview-area" id="previewArea">
+                PDFファイルをアップロードするとここにプレビューが表示されます
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ドラッグ＆ドロップの実装
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('file');
+        const previewArea = document.getElementById('previewArea');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '--primary-color';
+        });
+
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '--border-color';
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '--border-color';
+            
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                handleFileSelect(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        async function handleFileSelect(file) {
+            if (!file.name.toLowerCase().endsWith('.pdf')) {
+                alert('PDFファイルを選択してください');
+                return;
+            }
+
+            previewArea.innerHTML = '<div style="text-align: center; padding: 20px;"><div class="loading-spinner"></div><p style="margin-top: 10px;">読み込み中...</p></div>';
+            previewArea.classList.remove('empty');
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const response = await fetch('/preview', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('プレビューの取得に失敗しました');
+                }
+
+                const data = await response.json();
+
+                // テーブルを生成
+                let tableHTML = '<div class="preview-table-wrapper"><table class="preview-table"><tr>';
+                data.headers.forEach(header => {
+                    tableHTML += `<th>${header || ''}</th>`;
+                });
+                tableHTML += '</tr>';
+
+                data.data.forEach(row => {
+                    tableHTML += '<tr>';
+                    row.forEach(cell => {
+                        tableHTML += `<td>${cell || ''}</td>`;
+                    });
+                    tableHTML += '</tr>';
+                });
+                tableHTML += '</table></div>';
+
+                previewArea.innerHTML = tableHTML;
+
+            } catch (error) {
+                previewArea.classList.add('empty');
+                previewArea.innerHTML = `<div style="color: #e74c3c;">${error.message}</div>`;
+            }
+        }
+
+        // フォーム送信時の処理
+        document.getElementById('uploadForm').addEventListener('submit', function() {
+            const submitButton = this.querySelector('button[type="submit"]');
+            submitButton.disabled = true;
+            submitButton.textContent = '変換中...';
+        });
+
+        // 初期状態でemptyクラスを追加
+        document.addEventListener('DOMContentLoaded', function() {
+            previewArea.classList.add('empty');
+        });
+    </script>
+</body>
+</html> 
