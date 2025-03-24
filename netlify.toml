@@ -1,6 +1,6 @@
 [build]
   command = "pip install -r requirements.txt"
-  publish = "templates"
+  publish = "."
   functions = "functions"
 
 [build.environment]
@@ -9,7 +9,7 @@
 
 [[redirects]]
   from = "/*"
-  to = "/index.html"
+  to = "/templates/index.html"
   status = 200
 
 [functions]
