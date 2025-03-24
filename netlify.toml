@@ -1,11 +1,12 @@
 [build]
-  command = "pip install -r requirements.txt"
+  command = "npm install && pip install -r requirements.txt"
   publish = "templates"
   functions = "functions"
 
 [build.environment]
   PYTHON_VERSION = "3.9"
   PYTHONPATH = "."
+  NODE_VERSION = "16"
 
 [[redirects]]
   from = "/*"
