@@ -139,52 +139,153 @@ st.markdown('<p class="subtitle">PDFファイルをExcel形式に変換できま
 
 # ファイルアップロード
 st.markdown('<div class="upload-area">', unsafe_allow_html=True)
-uploaded_file = st.file_uploader("", type=['pdf'])
-if not uploaded_file:
-    st.markdown('📄 クリックまたはドラッグ＆ドロップでPDFファイルを選択')
+uploaded_files = st.file_uploader("", type=['pdf'], accept_multiple_files=True)
+if not uploaded_files:
+    st.markdown('📄 クリックまたはドラッグ＆ドロップでPDFファイルを選択（最大3つまで）')
+elif len(uploaded_files) > 3:
+    st.error("⚠️ 無料版では一度に3つまでのファイルしか変換できません")
 st.markdown('</div>', unsafe_allow_html=True)
 
-# プレビュー表示
-if uploaded_file is not None:
-    st.markdown('<div class="preview-box">', unsafe_allow_html=True)
-    with st.spinner('PDFを処理中...'):
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                tmp_path = tmp_file.name
+# SEO対策のためのメタ情報
+st.markdown("""
+<!-- SEO対策用メタ情報 -->
+<div style="display:none">
+    PDF Excel 変換 無料 表 テーブル 一括変換 データ抽出 オンライン ツール
+    PDFからExcelへの無料変換ツール 表形式データ抽出 高精度変換
+</div>
+""", unsafe_allow_html=True)
 
-            with pdfplumber.open(tmp_path) as pdf:
-                tables = []
-                for page in pdf.pages:
-                    table = page.extract_table()
-                    if table:
-                        tables.extend(table)
+# 複数ファイル処理部分
+if uploaded_files:
+    for i, uploaded_file in enumerate(uploaded_files[:3]):  # 最大3つまでに制限
+        with st.spinner(f'PDFファイル {i+1}/{len(uploaded_files)} を処理中...'):
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                    tmp_file.write(uploaded_file.getvalue())
+                    tmp_path = tmp_file.name
 
-                if tables:
-                    df = pd.DataFrame(tables[1:], columns=tables[0])
-                    st.markdown("### プレビュー")
-                    st.dataframe(df, use_container_width=True)
-                    
-                    # Excelファイル作成
-                    excel_file = 'converted_data.xlsx'
-                    df.to_excel(excel_file, index=False)
-                    
-                    with open(excel_file, 'rb') as f:
-                        st.download_button(
-                            label="📥 Excelファイルをダウンロード",
-                            data=f,
-                            file_name='converted_data.xlsx',
-                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                        )
-                    os.remove(excel_file)
-                else:
-                    st.warning("⚠️ テーブルデータが見つかりませんでした")
-        except Exception as e:
-            st.error("❌ エラーが発生しました。PDFの形式を確認してください。")
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-    st.markdown('</div>', unsafe_allow_html=True)
+                # 広告表示（処理中）
+                st.markdown('<div class="ad-container">広告スペース</div>', unsafe_allow_html=True)
+
+                with pdfplumber.open(tmp_path) as pdf:
+                    # テーブル認識精度の強化
+                    all_tables = []
+                    for page in pdf.pages:
+                        # 複数の抽出方法を試行
+                        table = extract_table_with_enhanced_recognition(page)
+                        if table:
+                            all_tables.extend(table)
+
+                    if all_tables:
+                        # pandasによるデータ整形
+                        df = enhance_table_structure(pd.DataFrame(all_tables))
+                        
+                        st.markdown(f"### {uploaded_file.name} のプレビュー")
+                        st.dataframe(df, use_container_width=True)
+                        
+                        # Excelファイル作成
+                        excel_file = f'converted_data_{i+1}.xlsx'
+                        save_enhanced_excel(df, excel_file)
+                        
+                        with open(excel_file, 'rb') as f:
+                            st.download_button(
+                                label=f"📥 {uploaded_file.name} をダウンロード",
+                                data=f,
+                                file_name=f'converted_{uploaded_file.name}.xlsx',
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
+                        os.remove(excel_file)
+                    else:
+                        st.warning(f"⚠️ {uploaded_file.name} からテーブルデータが見つかりませんでした")
+
+            except Exception as e:
+                st.error(f"❌ {uploaded_file.name} の処理中にエラーが発生しました")
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+# テーブル認識精度強化のための関数
+def extract_table_with_enhanced_recognition(page):
+    """
+    複数の抽出方法を試行して最適な結果を返す
+    """
+    try:
+        # 方法1: 標準的な抽出
+        table = page.extract_table()
+        if table and is_valid_table(table):
+            return table
+
+        # 方法2: カスタム設定での抽出
+        table = page.extract_table(
+            table_settings={
+                "vertical_strategy": "text",
+                "horizontal_strategy": "text",
+                "snap_tolerance": 3,
+                "join_tolerance": 3,
+                "edge_min_length": 3,
+                "min_words_vertical": 3,
+            }
+        )
+        if table and is_valid_table(table):
+            return table
+
+        # 方法3: 線による抽出
+        table = page.extract_table(
+            table_settings={
+                "vertical_strategy": "lines",
+                "horizontal_strategy": "lines",
+            }
+        )
+        return table if table and is_valid_table(table) else None
+
+    except Exception:
+        return None
+
+def enhance_table_structure(df):
+    """
+    pandas DataFrameの構造を改善
+    """
+    # NaN値の処理
+    df = df.fillna('')
+    
+    # 重複列の処理
+    df = df.loc[:, ~df.columns.duplicated()]
+    
+    # 空行の削除
+    df = df.dropna(how='all')
+    
+    # 列名の正規化
+    df.columns = [str(col).strip() for col in df.columns]
+    
+    # データの正規化
+    df = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+    
+    return df
+
+def save_enhanced_excel(df, filename):
+    """
+    整形されたExcelファイルを保存
+    """
+    writer = pd.ExcelWriter(filename, engine='openpyxl')
+    df.to_excel(writer, index=False, sheet_name='Sheet1')
+    
+    # ワークシートの取得
+    worksheet = writer.sheets['Sheet1']
+    
+    # 列幅の自動調整
+    for column in worksheet.columns:
+        max_length = 0
+        column = [cell for cell in column]
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(cell.value)
+            except:
+                pass
+        adjusted_width = (max_length + 2)
+        worksheet.column_dimensions[column[0].column_letter].width = adjusted_width
+    
+    writer.save()
 
 # サポート情報
 with st.expander("📌 サポート対象PDFについて"):
