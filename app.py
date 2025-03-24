@@ -171,27 +171,39 @@ if uploaded_files:
                     # テーブル認識精度の強化
                     all_tables = []
                     for page in pdf.pages:
-                        # 複数の抽出方法を試行
-                        table = extract_table_with_enhanced_recognition(page)
-                        if table:
-                            all_tables.extend(table)
+                        try:
+                            # シンプルな抽出方法を試す
+                            table = page.extract_table()
+                            if table:
+                                all_tables.extend(table)
+                            else:
+                                # テキストとして抽出を試みる
+                                text = page.extract_text()
+                                if text:
+                                    # テキストを1列のデータとして追加
+                                    all_tables.append([text])
+                        except Exception as e:
+                            st.warning(f"ページの処理中にエラーが発生しました: {str(e)}")
+                            continue
 
                     if all_tables:
-                        # pandasによるデータ整形
-                        df = enhance_table_structure(pd.DataFrame(all_tables))
+                        # データフレームの作成と最適化
+                        df = pd.DataFrame(all_tables)
+                        # 空の行と列を削除
+                        df = df.dropna(how='all').dropna(axis=1, how='all')
                         
                         st.markdown(f"### {uploaded_file.name} のプレビュー")
                         st.dataframe(df, use_container_width=True)
                         
                         # Excelファイル作成
                         excel_file = f'converted_data_{i+1}.xlsx'
-                        save_enhanced_excel(df, excel_file)
+                        df.to_excel(excel_file, index=False)
                         
                         with open(excel_file, 'rb') as f:
                             st.download_button(
                                 label=f"📥 {uploaded_file.name} をダウンロード",
                                 data=f,
-                                file_name=f'converted_{uploaded_file.name}.xlsx',
+                                file_name=excel_file,
                                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                             )
                         os.remove(excel_file)
