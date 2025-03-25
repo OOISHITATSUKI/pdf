@@ -285,6 +285,163 @@ def create_upload_section():
     
     return uploaded_file
 
+def process_pdf(uploaded_file, document_type=None, document_date=None):
+    """PDFの処理を行う関数"""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
+            temp_pdf.write(uploaded_file.getvalue())
+            pdf_path = temp_pdf.name
+
+        with pdfplumber.open(pdf_path) as pdf:
+            # 1ページ目のみ処理（無料プラン）
+            page = pdf.pages[0]
+            
+            # テーブルの抽出
+            tables = page.extract_tables()
+            if not tables:
+                raise ValueError("テーブルが見つかりませんでした")
+
+            # Excelファイルの作成
+            wb = Workbook()
+            ws = wb.active
+            
+            # スタイルの定義
+            header_font = Font(bold=True)
+            border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+            
+            # テーブルデータの書き込み
+            for i, row in enumerate(tables[0], 1):
+                for j, cell in enumerate(row, 1):
+                    if cell is not None:
+                        cell_value = str(cell).strip()
+                        ws_cell = ws.cell(row=i, column=j, value=cell_value)
+                        ws_cell.border = border
+                        if i == 1:
+                            ws_cell.font = header_font
+                        if cell_value.replace(',', '').replace('.', '').isdigit():
+                            ws_cell.alignment = Alignment(horizontal='right')
+
+            # 列幅の自動調整
+            for column in ws.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = (max_length + 2)
+                ws.column_dimensions[column_letter].width = adjusted_width
+
+            # 一時ファイルとして保存
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
+                wb.save(temp_excel.name)
+                with open(temp_excel.name, 'rb') as f:
+                    excel_data = f.read()
+
+            # 一時ファイルの削除
+            os.unlink(pdf_path)
+            os.unlink(temp_excel.name)
+
+            return excel_data
+
+    except Exception as e:
+        raise Exception(f"PDFの処理中にエラーが発生しました: {str(e)}")
+
+def create_preview(uploaded_file):
+    """PDFのプレビューを生成する関数"""
+    try:
+        if uploaded_file is not None:
+            with pdfplumber.open(io.BytesIO(uploaded_file.getvalue())) as pdf:
+                first_page = pdf.pages[0]
+                img = first_page.to_image()
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format='PNG')
+                img_byte_arr = img_byte_arr.getvalue()
+                return img_byte_arr
+        return None
+    except Exception as e:
+        st.error(f"プレビューの生成中にエラーが発生しました: {str(e)}")
+        return None
+
+def create_document_type_buttons():
+    """ドキュメントタイプ選択ボタンを作成"""
+    st.write("ドキュメントの種類を選択")
+    
+    # セッション状態の初期化
+    if 'selected_document_type' not in st.session_state:
+        st.session_state.selected_document_type = None
+    
+    # ボタンのスタイル
+    button_style = """
+        <style>
+        .stButton button {
+            width: 100%;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            background-color: white;
+        }
+        .stButton button:hover {
+            border-color: #4CAF50;
+            background-color: #f0f0f0;
+        }
+        .selected {
+            border-color: #4CAF50 !important;
+            background-color: #e8f5e9 !important;
+        }
+        </style>
+    """
+    st.markdown(button_style, unsafe_allow_html=True)
+    
+    # ボタンを2列で配置
+    col1, col2 = st.columns(2)
+    
+    document_types = {
+        "見積書": "estimate",
+        "請求書": "invoice",
+        "納品書": "delivery",
+        "領収書": "receipt",
+        "決算書": "financial",
+        "確定申告書": "tax_return",
+        "その他": "other"
+    }
+    
+    selected = False
+    for i, (label, value) in enumerate(document_types.items()):
+        with col1 if i % 2 == 0 else col2:
+            if st.button(
+                label,
+                key=f"doc_type_{value}",
+                help=f"{label}を選択",
+                type="secondary" if st.session_state.selected_document_type != value else "primary"
+            ):
+                st.session_state.selected_document_type = value
+                selected = True
+    
+    if not selected and st.session_state.selected_document_type is None:
+        st.warning("書類の種類を選択してください")
+        return None
+    
+    return st.session_state.selected_document_type
+
+def create_footer():
+    """フッターを作成"""
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("[利用規約](/terms)")
+    with col2:
+        st.markdown("[プライバシーポリシー](/privacy)")
+    with col3:
+        st.markdown("[お問い合わせ](/contact)")
+
 def main():
     """メイン関数"""
     create_hero_section()
@@ -294,10 +451,72 @@ def main():
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        uploaded_file = create_upload_section()
+        st.subheader("ファイルをアップロード")
+        
+        # 残り変換回数の表示
+        daily_count = get_daily_conversion_count(st.session_state.user_id)
+        remaining = 3 - daily_count  # 基本は3回
+        st.markdown(f"📊 本日の残り変換回数：{remaining}/3回")
+        
+        # ドキュメントタイプの選択（ボタン形式）
+        document_type = create_document_type_buttons()
+        
+        # 日付入力
+        document_date = st.date_input(
+            "書類の日付",
+            value=None,
+            help="YYYY/MM/DD形式で入力してください"
+        )
+        
+        # ファイルアップロード
+        uploaded_file = st.file_uploader(
+            "クリックまたはドラッグ&ドロップでPDFファイルを選択",
+            type=['pdf'],
+            help="ファイルサイズの制限: 200MB"
+        )
+        
+        st.info("💡 無料プランでは1ページ目のみ変換されます。全ページ変換は有料プランでご利用いただけます。")
+        
+        if uploaded_file is not None and document_type is not None:
+            if st.button("Excelに変換する"):
+                if check_conversion_limit(st.session_state.user_id):
+                    try:
+                        excel_data = process_pdf(uploaded_file, document_type, document_date)
+                        # 変換履歴を保存
+                        save_conversion_history(
+                            st.session_state.user_id,
+                            document_type,
+                            document_date.strftime('%Y-%m-%d') if document_date else None,
+                            uploaded_file.name,
+                            "success"
+                        )
+                        st.download_button(
+                            label="Excelファイルをダウンロード",
+                            data=excel_data,
+                            file_name="converted.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    except Exception as e:
+                        st.error(f"処理中にエラーが発生しました: {str(e)}")
+                        # エラー履歴を保存
+                        save_conversion_history(
+                            st.session_state.user_id,
+                            document_type,
+                            document_date.strftime('%Y-%m-%d') if document_date else None,
+                            uploaded_file.name,
+                            f"error: {str(e)}"
+                        )
+                else:
+                    st.error("本日の変換回数制限に達しました。プランをアップグレードすると、より多くの変換が可能です。")
     
     with col2:
-        create_preview_section(uploaded_file)
+        st.subheader("プレビュー")
+        if uploaded_file is not None:
+            preview_image = create_preview(uploaded_file)
+            if preview_image is not None:
+                st.image(preview_image, use_column_width=True)
+    
+    create_footer()
 
 if __name__ == "__main__":
     main() 
