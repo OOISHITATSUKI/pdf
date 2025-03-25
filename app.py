@@ -163,8 +163,39 @@ show_user_status()
 
 # メインコンテンツ
 st.markdown('<div class="main-content">', unsafe_allow_html=True)
-st.title("PDF to Excel 変換ツール")
-st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。")
+
+# 2列レイアウトでヘッダーを作成
+header_left, header_right = st.columns([3, 1])
+
+with header_left:
+    st.title("PDF to Excel 変換ツール")
+    st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。")
+
+with header_right:
+    # ユーザー状態の表示
+    if st.session_state.user_state['is_logged_in']:
+        if st.session_state.user_state['is_premium']:
+            st.markdown("""
+                <div style="text-align: right; padding: 10px; background: linear-gradient(45deg, #FFD700, #FFA500); 
+                border-radius: 10px; color: white; margin-bottom: 10px;">
+                    🌟 プレミアム会員
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            remaining = 3 - st.session_state.user_state['daily_conversions']
+            st.markdown(f"""
+                <div style="text-align: right; padding: 10px; background: #f0f2f6; 
+                border-radius: 10px; margin-bottom: 10px;">
+                    無料会員 (残り {remaining}回)
+                </div>
+                """, unsafe_allow_html=True)
+            st.button("🌟 プレミアムに変更", key="upgrade_button")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.button("ログイン", key="login_button")
+        with col2:
+            st.button("新規登録", key="signup_button")
 
 # ファイルアップロード
 st.markdown('<div class="upload-area">', unsafe_allow_html=True)
