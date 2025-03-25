@@ -6,6 +6,13 @@ import os
 import time
 from datetime import datetime, timedelta
 
+# ページ設定
+st.set_page_config(
+    page_title="PDF to Excel 変換ツール｜無料でPDFの表をExcelに変換",
+    page_icon="📄",
+    layout="wide"
+)
+
 # セッション状態の初期化
 if 'user_state' not in st.session_state:
     st.session_state.user_state = {
@@ -38,262 +45,126 @@ def increment_conversion_count():
         st.session_state.user_state['daily_conversions'] += 1
         st.session_state.user_state['last_conversion_date'] = datetime.now().date()
 
-# ログイン状態に応じたUIの表示
-def show_user_status():
-    """ユーザーステータスを表示する関数"""
-    if st.session_state.user_state['is_logged_in']:
-        if st.session_state.user_state['is_premium']:
-            st.sidebar.success("🌟 プレミアム会員")
-            st.sidebar.write("無制限で変換できます")
-        else:
-            st.sidebar.info("📝 無料会員")
-            remaining = 3 - st.session_state.user_state['daily_conversions']
-            st.sidebar.write(f"本日の残り変換可能回数: {remaining}回")
-            st.sidebar.button("🌟 プレミアム会員になる", 
-                            help="月額500円で無制限に変換できます！")
-    else:
-        st.sidebar.warning("未ログイン")
-        st.sidebar.write("1日3回まで変換できます")
-        col1, col2 = st.sidebar.columns(2)
-        col1.button("ログイン")
-        col2.button("新規登録")
-
-# ページ設定
-st.set_page_config(
-    page_title="PDF to Excel 変換ツール",
-    page_icon="📄",
-    layout="wide"
-)
-
-# カスタムCSSを更新
+# カスタムCSSの追加
 st.markdown("""
 <style>
-    /* 全体のスタイル */
-    .main {
-        background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
-        padding: 0;
-    }
-    .block-container {
-        padding: 2rem 3rem;
+    /* 既存のスタイルをリセット */
+    #root > div:nth-child(1) > div > div > div > div > section > div {
+        padding-top: 0rem;
     }
     
-    /* タイトルスタイル */
-    h1 {
-        color: #1E88E5;
-        font-size: 2.5rem !important;
-        font-weight: 700 !important;
-        margin-bottom: 1rem !important;
-        text-align: center;
-        background: linear-gradient(45deg, #1E88E5, #64B5F6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    
-    /* サブタイトル */
-    .subtitle {
-        text-align: center;
-        color: #666;
-        font-size: 1.1rem;
-        margin-bottom: 2rem;
-    }
-    
-    /* アップロードエリア */
-    .upload-area {
-        background: white;
-        border: 2px dashed #1E88E5;
-        border-radius: 15px;
-        padding: 2rem;
-        text-align: center;
-        margin: 2rem 0;
-        transition: all 0.3s ease;
-    }
-    .upload-area:hover {
-        border-color: #64B5F6;
-        background: #f8f9fa;
-    }
-    
-    /* プレビューエリア */
-    .preview-box {
-        background: white;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        padding: 1.5rem;
-        margin: 2rem 0;
-    }
-    
-    /* データフレームスタイル */
-    .stDataFrame {
-        width: 100%;
-    }
-    div[data-testid="stDataFrame"] > div {
-        width: 100%;
-    }
-    .dataframe {
-        width: 100%;
-        border-collapse: separate;
-        border-spacing: 0;
-    }
-    thead tr th {
-        background: linear-gradient(45deg, #1E88E5, #64B5F6);
-        color: white !important;
-        padding: 12px !important;
-    }
-    tbody tr:nth-child(even) {
-        background-color: #f8f9fa;
-    }
-    tbody tr:hover {
-        background-color: #e3f2fd;
-    }
-    
-    /* ダウンロードボタン */
-    .stDownloadButton button {
-        background: linear-gradient(45deg, #1E88E5, #64B5F6) !important;
-        color: white !important;
-        padding: 0.75rem 2rem !important;
-        border-radius: 25px !important;
-        border: none !important;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
-        transition: all 0.3s ease !important;
-    }
-    .stDownloadButton button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15) !important;
-    }
-    
-    /* エクスパンダー */
-    .streamlit-expanderHeader {
-        background: white !important;
-        border-radius: 10px !important;
-        border: 1px solid #e0e0e0 !important;
-    }
-    .streamlit-expanderHeader:hover {
-        background: #f8f9fa !important;
-    }
-    
-    /* フッター */
-    .footer {
-        text-align: center;
-        padding: 2rem;
-        color: #666;
-        background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
-        border-radius: 15px;
-        margin-top: 3rem;
-    }
-    
-    /* ローディングスピナー */
-    .stSpinner > div {
-        border-color: #1E88E5 !important;
-    }
-    
-    /* ヘッダー全体のスタイル */
+    /* ヘッダーコンテナ */
     .header-container {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 1rem;
-        background-color: white;
-        border-bottom: 1px solid #f0f2f6;
-        margin-bottom: 2rem;
+        position: fixed;
+        top: 0;
+        right: 0;
+        padding: 1rem 2rem;
+        background: white;
+        z-index: 1000;
+        border-bottom-left-radius: 10px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     }
     
-    /* タイトル部分のスタイル */
-    .header-title {
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: #0066cc;
-    }
-    
-    /* ユーザー状態表示部分のスタイル */
-    .user-status {
+    /* ユーザー情報 */
+    .user-info {
         display: flex;
         align-items: center;
         gap: 1rem;
     }
     
-    .user-status-text {
-        font-size: 0.9rem;
-        color: #666;
-    }
-    
+    /* バッジスタイル */
     .premium-badge {
-        background-color: #ffd700;
-        color: #333;
-        padding: 0.2rem 0.5rem;
-        border-radius: 1rem;
-        font-size: 0.8rem;
+        background: linear-gradient(45deg, #FFD700, #FFA500);
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-weight: bold;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     
     .free-badge {
-        background-color: #e0e0e0;
-        color: #333;
-        padding: 0.2rem 0.5rem;
-        border-radius: 1rem;
-        font-size: 0.8rem;
+        background: #f0f2f6;
+        color: #666;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-weight: bold;
     }
     
-    .login-button {
-        background-color: #0066cc;
+    /* 残り回数表示 */
+    .remaining-count {
+        color: #666;
+        font-size: 0.9rem;
+    }
+    
+    /* アップグレードボタン */
+    .upgrade-button {
+        background: linear-gradient(45deg, #FFD700, #FFA500);
         color: white;
         padding: 0.3rem 0.8rem;
-        border-radius: 0.5rem;
+        border-radius: 15px;
         text-decoration: none;
-        font-size: 0.9rem;
+        font-weight: bold;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     
-    .upgrade-button {
-        background-color: #ffd700;
-        color: #333;
+    /* ログインボタン */
+    .login-button {
+        background: #0066cc;
+        color: white;
         padding: 0.3rem 0.8rem;
-        border-radius: 0.5rem;
+        border-radius: 15px;
         text-decoration: none;
-        font-size: 0.9rem;
+        font-weight: bold;
+    }
+    
+    /* メインコンテンツのパディング調整 */
+    .main-content {
+        padding-top: 4rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-def show_header():
-    """ヘッダーを表示する関数"""
-    header_html = """
-    <div class="header-container">
-        <div class="header-title">
-            PDF to Excel 変換ツール
-        </div>
-        <div class="user-status">
-    """
-    
+# ユーザー状態を表示する関数
+def show_user_status():
     if st.session_state.user_state['is_logged_in']:
         if st.session_state.user_state['is_premium']:
-            header_html += """
-            <span class="premium-badge">🌟 プレミアム</span>
-            <span class="user-status-text">無制限で変換できます</span>
+            status_html = """
+            <div class="header-container">
+                <div class="user-info">
+                    <span class="premium-badge">🌟 プレミアム会員</span>
+                </div>
+            </div>
             """
         else:
             remaining = 3 - st.session_state.user_state['daily_conversions']
-            header_html += f"""
-            <span class="free-badge">無料会員</span>
-            <span class="user-status-text">残り {remaining}回</span>
-            <a href="#" class="upgrade-button">🌟 プレミアムに変更</a>
+            status_html = f"""
+            <div class="header-container">
+                <div class="user-info">
+                    <span class="free-badge">無料会員</span>
+                    <span class="remaining-count">残り {remaining}回</span>
+                    <a href="#" class="upgrade-button">🌟 プレミアムに変更</a>
+                </div>
+            </div>
             """
     else:
-        header_html += """
-        <a href="#" class="login-button">ログイン</a>
-        <span class="user-status-text">or</span>
-        <a href="#" class="login-button">新規登録</a>
+        status_html = """
+        <div class="header-container">
+            <div class="user-info">
+                <a href="#" class="login-button">ログイン</a>
+                <a href="#" class="login-button">新規登録</a>
+            </div>
+        </div>
         """
     
-    header_html += """
-        </div>
-    </div>
-    """
-    
-    st.markdown(header_html, unsafe_allow_html=True)
+    st.markdown(status_html, unsafe_allow_html=True)
 
-# メインレイアウト
-st.markdown('<h1>PDF to Excel 変換ツール</h1>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。</p>', unsafe_allow_html=True)
-
-# ユーザーステータスの表示
+# ユーザー状態の表示
 show_user_status()
+
+# メインコンテンツ
+st.markdown('<div class="main-content">', unsafe_allow_html=True)
+st.title("PDF to Excel 変換ツール")
+st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。")
 
 # ファイルアップロード
 st.markdown('<div class="upload-area">', unsafe_allow_html=True)
@@ -478,7 +349,4 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-show_header()  # ヘッダーの表示
-
-# 説明文
-st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。") 
+st.markdown('</div>', unsafe_allow_html=True) 
