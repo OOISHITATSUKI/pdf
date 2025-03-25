@@ -667,13 +667,6 @@ def create_preview_section():
 
 def main():
     """メイン関数"""
-    # ページ設定
-    st.set_page_config(
-        page_title="PDF to Excel 変換ツール",
-        page_icon="📄",
-        layout="wide"
-    )
-    
     # 各セクションの作成
     create_hero_section()
     
