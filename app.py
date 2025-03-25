@@ -6,7 +6,7 @@ from PIL import Image
 import tempfile
 import os
 import re
-from datetime import datetime
+from datetime import datetime, date
 from openpyxl.utils import get_column_letter
 import uuid
 from sqlalchemy.ext.declarative import declarative_base
@@ -19,6 +19,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from typing import Optional
+from openpyxl.cell.cell import MergedCell
 
 # ページ設定（必ず最初に実行）
 st.set_page_config(
@@ -285,6 +286,39 @@ def create_upload_section():
     
     return uploaded_file
 
+def get_user_plan(user_id):
+    """ユーザーのプランを取得する関数"""
+    try:
+        if user_id is None:
+            return "free_guest"
+        
+        # セッションからプラン情報を取得
+        user_plan = st.session_state.get('user_plan', 'free_registered')
+        
+        # プレミアムユーザーの判定（仮の実装）
+        premium_users = st.session_state.get('premium_users', set())
+        if user_id in premium_users:
+            return "premium"
+        
+        return user_plan
+    except Exception as e:
+        st.error(f"プラン情報の取得中にエラーが発生しました: {str(e)}")
+        return "free_guest"  # エラー時は最も制限の厳しいプランを返す
+
+def get_plan_limits(plan_type):
+    """プランごとの制限を取得"""
+    limits = {
+        "premium": float('inf'),  # 無制限
+        "free_registered": 5,     # ログインユーザー
+        "free_guest": 3          # 未ログインユーザー
+    }
+    return limits.get(plan_type, 3)  # デフォルトは3回
+
+def get_conversion_limit(user_id=None):
+    """ユーザーの変換制限を取得"""
+    plan = get_user_plan(user_id)
+    return get_plan_limits(plan)
+
 def process_pdf(uploaded_file, document_type=None, document_date=None):
     """PDFの処理を行う関数"""
     try:
@@ -309,7 +343,7 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
             
             # シート名の設定
             sheet_name = f"{get_document_type_label(document_type)}_{document_date.strftime('%Y-%m-%d') if document_date else 'unknown_date'}"
-            ws.title = sheet_name
+            ws.title = sheet_name[:31]  # Excelのシート名制限（31文字）に対応
             
             # スタイルの定義
             header_font = Font(bold=True, size=12)
@@ -390,17 +424,25 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
                     total_row += 1
             
             # 列幅の自動調整
-            for column in ws.columns:
+            for column_cells in ws.columns:
                 max_length = 0
-                column_letter = column[0].column_letter
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                adjusted_width = (max_length + 2) * 1.2
-                ws.column_dimensions[column_letter].width = adjusted_width
+                column = column_cells[0].column  # 列番号を取得
+                
+                # 結合セルを考慮して最大長を計算
+                for cell in column_cells:
+                    if cell.value:
+                        try:
+                            # 結合セルの場合は、元のセルの値を使用
+                            if isinstance(cell, MergedCell):
+                                continue
+                            length = len(str(cell.value))
+                            max_length = max(max_length, length)
+                        except:
+                            pass
+                
+                # 列幅を設定（最小幅を確保）
+                adjusted_width = max(max_length + 2, 8) * 1.2
+                ws.column_dimensions[get_column_letter(column)].width = adjusted_width
 
             # 一時ファイルとして保存
             with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
@@ -429,20 +471,6 @@ def get_document_type_label(doc_type):
         "other": "その他"
     }
     return type_map.get(doc_type, "不明な書類")
-
-def get_conversion_limit(user_id=None):
-    """ユーザーの変換制限を取得"""
-    if user_id is None:
-        return 3  # 未ログインユーザー
-    
-    # ユーザープランの取得（DBから）
-    user_plan = get_user_plan(user_id)
-    if user_plan == "premium":
-        return float('inf')  # 無制限
-    elif user_plan == "free":
-        return 5  # ログイン済み無料プラン
-    else:
-        return 3  # デフォルト（未ログイン扱い）
 
 def display_conversion_count():
     """変換回数の表示"""
