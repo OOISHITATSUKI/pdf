@@ -1,12 +1,13 @@
 import streamlit as st
 import pdfplumber
+from pdf2image import convert_from_bytes
 import pandas as pd
 import numpy as np
 from PIL import Image
 import tempfile
 import os
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from openpyxl.utils import get_column_letter
 import uuid
 from sqlalchemy.ext.declarative import declarative_base
@@ -18,8 +19,9 @@ import io
 import json
 import sqlite3
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict, Set
 from openpyxl.cell.cell import MergedCell
+import hashlib
 
 # ページ設定（必ず最初に実行）
 st.set_page_config(
@@ -30,6 +32,150 @@ st.set_page_config(
 
 # データベースの設定
 DB_PATH = "pdf_converter.db"
+
+# プラン定義
+PLAN_LIMITS = {
+    "free_guest": 3,        # 未ログインユーザー
+    "free_registered": 5,   # 登録済み無料ユーザー
+    "premium_basic": 1000,  # $5プラン
+    "premium_pro": float('inf')  # $20プラン
+}
+
+PLAN_NAMES = {
+    "free_guest": "無料プラン（未登録）",
+    "free_registered": "無料プラン（登録済）",
+    "premium_basic": "ベーシックプラン（$5）",
+    "premium_pro": "プロフェッショナルプラン（$20）"
+}
+
+class ConversionTracker:
+    def __init__(self):
+        self.conn = sqlite3.connect('conversion_tracker.db')
+        self.setup_database()
+    
+    def setup_database(self):
+        """データベースのセットアップ"""
+        with self.conn:
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS conversion_counts (
+                    user_id TEXT,
+                    ip_address TEXT,
+                    browser_id TEXT,
+                    conversion_date DATE,
+                    count INTEGER,
+                    PRIMARY KEY (user_id, ip_address, browser_id, conversion_date)
+                )
+            """)
+            
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_plans (
+                    user_id TEXT PRIMARY KEY,
+                    plan_type TEXT,
+                    updated_at TIMESTAMP
+                )
+            """)
+    
+    def get_unique_identifier(self, user_id: Optional[str] = None) -> str:
+        """ユーザー識別子の生成（IPアドレス + ブラウザID + ユーザーID）"""
+        ip = st.session_state.get('client_ip', 'unknown')
+        browser_id = st.session_state.get('browser_id')
+        if not browser_id:
+            browser_id = str(uuid.uuid4())
+            st.session_state['browser_id'] = browser_id
+        
+        identifier = f"{ip}:{browser_id}"
+        if user_id:
+            identifier += f":{user_id}"
+        
+        return hashlib.sha256(identifier.encode()).hexdigest()
+    
+    def get_daily_count(self, user_id: Optional[str] = None) -> int:
+        """日次変換回数の取得"""
+        identifier = self.get_unique_identifier(user_id)
+        today = date.today()
+        
+        with self.conn:
+            cursor = self.conn.execute("""
+                SELECT SUM(count) FROM conversion_counts
+                WHERE (user_id = ? OR ip_address = ? OR browser_id = ?)
+                AND conversion_date = ?
+            """, (identifier, identifier, identifier, today))
+            
+            count = cursor.fetchone()[0]
+            return count if count is not None else 0
+    
+    def increment_count(self, user_id: Optional[str] = None) -> bool:
+        """変換回数のインクリメント"""
+        identifier = self.get_unique_identifier(user_id)
+        today = date.today()
+        current_count = self.get_daily_count(user_id)
+        plan_limit = self.get_plan_limit(user_id)
+        
+        if current_count >= plan_limit:
+            return False
+        
+        with self.conn:
+            self.conn.execute("""
+                INSERT INTO conversion_counts (user_id, ip_address, browser_id, conversion_date, count)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT (user_id, ip_address, browser_id, conversion_date)
+                DO UPDATE SET count = count + 1
+            """, (identifier, identifier, identifier, today))
+        
+        return True
+    
+    def get_plan_limit(self, user_id: Optional[str] = None) -> int:
+        """ユーザープランの制限値を取得"""
+        if not user_id:
+            return PLAN_LIMITS["free_guest"]
+        
+        with self.conn:
+            cursor = self.conn.execute("""
+                SELECT plan_type FROM user_plans WHERE user_id = ?
+            """, (user_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                return PLAN_LIMITS.get(result[0], PLAN_LIMITS["free_guest"])
+            return PLAN_LIMITS["free_registered"]
+    
+    def update_plan(self, user_id: str, plan_type: str):
+        """ユーザープランの更新"""
+        with self.conn:
+            self.conn.execute("""
+                INSERT INTO user_plans (user_id, plan_type, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    plan_type = excluded.plan_type,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (user_id, plan_type))
+    
+    def adjust_count_after_registration(self, user_id: str):
+        """登録後の変換回数調整（+2回）"""
+        identifier = self.get_unique_identifier(user_id)
+        today = date.today()
+        
+        with self.conn:
+            # 既存の回数を取得
+            cursor = self.conn.execute("""
+                SELECT count FROM conversion_counts
+                WHERE (user_id = ? OR ip_address = ? OR browser_id = ?)
+                AND conversion_date = ?
+            """, (identifier, identifier, identifier, today))
+            
+            current_count = cursor.fetchone()
+            if current_count:
+                # 既存レコードの更新（最大5回まで）
+                new_count = min(current_count[0] + 2, PLAN_LIMITS["free_registered"])
+                self.conn.execute("""
+                    UPDATE conversion_counts
+                    SET count = ?
+                    WHERE (user_id = ? OR ip_address = ? OR browser_id = ?)
+                    AND conversion_date = ?
+                """, (new_count, identifier, identifier, identifier, today))
+
+# グローバルなトラッカーインスタンス
+tracker = ConversionTracker()
 
 @dataclass
 class ConversionHistory:
@@ -476,22 +622,36 @@ def display_conversion_count():
     """変換回数の表示"""
     try:
         user_id = st.session_state.get('user_id')
-        daily_count = get_daily_conversion_count(user_id)
-        limit = get_conversion_limit(user_id)
+        daily_count = tracker.get_daily_count(user_id)
+        limit = tracker.get_plan_limit(user_id)
         
         if limit == float('inf'):
             st.markdown("📊 **変換回数制限**: 無制限")
         else:
             remaining = limit - daily_count
-            st.markdown(f"📊 **本日の残り変換回数**: {remaining} / {limit}回")
+            plan_name = PLAN_NAMES.get(
+                st.session_state.get('user_plan', 'free_guest'),
+                "無料プラン（未登録）"
+            )
+            
+            st.markdown(f"📊 **本日の残り変換回数**: {remaining} / {limit}回 ({plan_name})")
             
             # 警告表示
             if remaining <= 1:
-                st.warning("⚠️ 本日の変換回数が残りわずかです。プレミアムプランへのアップグレードで無制限に変換できます。")
+                st.warning("⚠️ 本日の変換回数が残りわずかです。プランをアップグレードすると変換回数が増加します。")
+                
+                # プラン別の案内
+                if not user_id:
+                    st.info("💡 アカウント登録で、本日の残り回数が2回増加します！")
+                elif st.session_state.get('user_plan') == 'free_registered':
+                    st.info("💡 $5プランにアップグレードで、1日1000回まで変換可能になります！")
+                elif st.session_state.get('user_plan') == 'premium_basic':
+                    st.info("💡 $20プランにアップグレードで、無制限で変換可能になります！")
+    
     except Exception as e:
         st.error(f"変換回数の取得中にエラーが発生しました: {str(e)}")
         # エラー時はデフォルト値を表示
-        st.markdown("📊 **本日の残り変換回数**: 3 / 3回")
+        st.markdown("📊 **本日の残り変換回数**: 3 / 3回 (無料プラン)")
 
 def create_document_type_buttons():
     """ドキュメントタイプ選択ボタンを作成"""
@@ -596,6 +756,32 @@ def create_footer():
         st.markdown("[プライバシーポリシー](/privacy)")
     with col3:
         st.markdown("[お問い合わせ](/contact)")
+
+def create_preview(uploaded_file):
+    """PDFのプレビューを生成する関数"""
+    try:
+        if uploaded_file is not None:
+            # PDFをバイトデータとして読み込み
+            pdf_bytes = uploaded_file.getvalue()
+            
+            # PDF2Imageを使用して最初のページを画像に変換
+            images = convert_from_bytes(
+                pdf_bytes,
+                first_page=1,
+                last_page=1,
+                dpi=150,
+                fmt='PNG'
+            )
+            
+            if images:
+                # 最初のページの画像をバイトストリームに変換
+                img_byte_arr = io.BytesIO()
+                images[0].save(img_byte_arr, format='PNG')
+                return img_byte_arr.getvalue()
+        return None
+    except Exception as e:
+        st.error(f"プレビューの生成中にエラーが発生しました: {str(e)}")
+        return None
 
 def main():
     """メイン関数"""
