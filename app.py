@@ -14,6 +14,7 @@ from sqlalchemy import Column, String, DateTime, Enum, JSON, ForeignKey, Text
 from sqlalchemy.sql import func
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
+import io
 
 # ページ設定（必ず最初に実行）
 st.set_page_config(
@@ -659,11 +660,21 @@ def create_upload_section():
             except Exception as e:
                 st.error(f"処理中にエラーが発生しました: {str(e)}")
 
-def create_preview_section():
-    """プレビューセクションを作成"""
-    st.subheader("プレビュー")
-    if uploaded_file is not None:
-        st.image(uploaded_file, use_column_width=True)
+def create_preview(uploaded_file):
+    """PDFのプレビューを生成する関数"""
+    try:
+        if uploaded_file is not None:
+            with pdfplumber.open(io.BytesIO(uploaded_file.getvalue())) as pdf:
+                first_page = pdf.pages[0]
+                img = first_page.to_image()
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format='PNG')
+                img_byte_arr = img_byte_arr.getvalue()
+                return img_byte_arr
+        return None
+    except Exception as e:
+        st.error(f"プレビューの生成中にエラーが発生しました: {str(e)}")
+        return None
 
 def main():
     """メイン関数"""
