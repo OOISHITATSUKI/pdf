@@ -26,6 +26,9 @@ st.set_page_config(
 if 'users' not in st.session_state:
     st.session_state.users = {}
 
+if 'conversion_count' not in st.session_state:
+    st.session_state.conversion_count = 0
+
 def initialize_session_state():
     """セッション状態の初期化とローカルストレージとの同期"""
     if 'user_state' not in st.session_state:
@@ -571,13 +574,9 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
                     if cell is not None:
                         cell_value = str(cell).strip()
                         ws_cell = ws.cell(row=i, column=j, value=cell_value)
-                        
-                        # スタイルの適用
                         ws_cell.border = border
-                        if i == 1:  # ヘッダー行
+                        if i == 1:
                             ws_cell.font = header_font
-                        
-                        # 数値の場合は右寄せ
                         if cell_value.replace(',', '').replace('.', '').isdigit():
                             ws_cell.alignment = Alignment(horizontal='right')
 
@@ -621,31 +620,36 @@ def create_upload_section():
     st.subheader("ファイルをアップロード")
     
     # 残り変換回数の表示
-    st.markdown("📊 本日の残り変換回数：3/3回")
+    remaining = 3 - st.session_state.conversion_count
+    st.markdown(f"📊 本日の残り変換回数：{remaining}/3回")
     
     # ドキュメントタイプの選択
-    doc_type = st.selectbox(
+    document_type = st.selectbox(
         "ドキュメントの種類を選択",
         ["請求書", "見積書", "納品書", "確定申告書", "その他"]
     )
     
     # 日付入力
-    doc_date = st.date_input("書類の日付", format="YYYY/MM/DD")
+    document_date = st.date_input(
+        "書類の日付",
+        value=None,
+        help="YYYY/MM/DD形式で入力してください"
+    )
     
     # ファイルアップロード
     uploaded_file = st.file_uploader(
-        "クリックまたはドラッグ&ドロップでPDFファイルを選択", 
+        "クリックまたはドラッグ&ドロップでPDFファイルを選択",
         type=['pdf'],
         help="ファイルサイズの制限: 200MB"
     )
     
-    # 無料プランの注意書き
     st.info("💡 無料プランでは1ページ目のみ変換されます。全ページ変換は有料プランでご利用いただけます。")
     
     if uploaded_file is not None:
         if st.button("Excelに変換する"):
             try:
-                excel_data = process_pdf(uploaded_file, doc_type, doc_date)
+                excel_data = process_pdf(uploaded_file, document_type, document_date)
+                st.session_state.conversion_count += 1
                 st.download_button(
                     label="Excelファイルをダウンロード",
                     data=excel_data,
@@ -658,8 +662,8 @@ def create_upload_section():
 def create_preview_section():
     """プレビューセクションを作成"""
     st.subheader("プレビュー")
-    # プレビュー領域のプレースホルダー
-    st.empty()
+    if uploaded_file is not None:
+        st.image(uploaded_file, use_column_width=True)
 
 def main():
     """メイン関数"""
