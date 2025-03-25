@@ -46,6 +46,8 @@ if 'last_rerun_time' not in st.session_state:
     st.session_state.last_rerun_time = datetime.now()
 if 'conversion_success' not in st.session_state:
     st.session_state.conversion_success = False
+if 'processing_pdf' not in st.session_state:
+    st.session_state.processing_pdf = False
 
 # データベースの設定
 DB_PATH = "pdf_converter.db"
@@ -395,35 +397,36 @@ def create_upload_section():
     
     if uploaded_file is not None:
         if st.button("Excelに変換する"):
-            if check_conversion_limit(st.session_state.user_id):
-                try:
-                    excel_data = process_pdf(uploaded_file, document_type, document_date)
-                    # 変換履歴を保存
-                    save_conversion_history(
-                        st.session_state.user_id,
-                        document_type,
-                        document_date.strftime('%Y-%m-%d') if document_date else None,
-                        uploaded_file.name,
-                        "success"
-                    )
-                    st.download_button(
-                        label="Excelファイルをダウンロード",
-                        data=excel_data,
-                        file_name="converted.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                except Exception as e:
-                    st.error(f"処理中にエラーが発生しました: {str(e)}")
-                    # エラー履歴を保存
-                    save_conversion_history(
-                        st.session_state.user_id,
-                        document_type,
-                        document_date.strftime('%Y-%m-%d') if document_date else None,
-                        uploaded_file.name,
-                        f"error: {str(e)}"
-                    )
-            else:
-                st.error("本日の変換回数制限に達しました。プランをアップグレードすると、より多くの変換が可能です。")
+            if not st.session_state.processing_pdf:  # 処理中でない場合のみ実行
+                if check_conversion_limit(st.session_state.user_id):
+                    try:
+                        excel_data = process_pdf(uploaded_file, document_type, document_date)
+                        # 変換履歴を保存
+                        save_conversion_history(
+                            st.session_state.user_id,
+                            document_type,
+                            document_date.strftime('%Y-%m-%d') if document_date else None,
+                            uploaded_file.name,
+                            "success"
+                        )
+                        st.download_button(
+                            label="Excelファイルをダウンロード",
+                            data=excel_data,
+                            file_name="converted.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    except Exception as e:
+                        st.error(f"処理中にエラーが発生しました: {str(e)}")
+                        # エラー履歴を保存
+                        save_conversion_history(
+                            st.session_state.user_id,
+                            document_type,
+                            document_date.strftime('%Y-%m-%d') if document_date else None,
+                            uploaded_file.name,
+                            f"error: {str(e)}"
+                        )
+                else:
+                    st.error("本日の変換回数制限に達しました。プランをアップグレードすると、より多くの変換が可能です。")
     
     return uploaded_file
 
@@ -477,8 +480,10 @@ def process_pdf_with_ocr(image_bytes, document_type):
         return None
 
 def process_pdf(uploaded_file, document_type=None, document_date=None):
-    """PDFを処理してExcelに変換する関数"""
     try:
+        if st.session_state.processing_pdf:
+            return None
+        st.session_state.processing_pdf = True
         # 変換回数制限のチェック
         user_id = st.session_state.get('user_id')
         if not check_conversion_limit(user_id):
@@ -553,11 +558,10 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
         if increment_conversion_count(user_id):
             st.session_state.conversion_success = True
             st.success("変換が完了しました！")
-            # 再描画制御
             current_time = datetime.now()
-            if (current_time - st.session_state.last_rerun_time).total_seconds() > 1:  # 1秒以上の間隔を確保
+            if (current_time - st.session_state.last_rerun_time).total_seconds() > 1:
                 st.session_state.rerun_count += 1
-                if st.session_state.rerun_count <= 2:  # 最大2回まで再描画を許可
+                if st.session_state.rerun_count <= 1:  # 最大1回まで
                     st.session_state.last_rerun_time = current_time
                     st.experimental_rerun()
         else:
@@ -568,6 +572,8 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
     except Exception as e:
         st.error(f"PDFの処理中にエラーが発生しました: {str(e)}")
         return None
+    finally:
+        st.session_state.processing_pdf = False
 
 def get_document_type_label(doc_type):
     """ドキュメントタイプのコードから表示用ラベルを取得"""
@@ -782,40 +788,41 @@ def main():
         
         if uploaded_file is not None and document_type is not None:
             if st.button("Excelに変換する"):
-                if check_conversion_limit(st.session_state.get('user_id')):
-                    try:
-                        excel_data = process_pdf(uploaded_file, document_type, document_date)
-                        # 変換履歴を保存
-                        save_conversion_history(
-                            st.session_state.get('user_id'),
-                            document_type,
-                            document_date.strftime('%Y-%m-%d') if document_date else None,
-                            uploaded_file.name,
-                            "success"
-                        )
-                        # 変換回数を更新
-                        increment_conversion_count(st.session_state.get('user_id'))
-                        # 変換回数の表示を更新
-                        display_conversion_count()
-                        
-                        st.download_button(
-                            label="Excelファイルをダウンロード",
-                            data=excel_data,
-                            file_name=f"{get_document_type_label(document_type)}_{document_date.strftime('%Y-%m-%d') if document_date else 'unknown_date'}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                    except Exception as e:
-                        st.error(f"処理中にエラーが発生しました: {str(e)}")
-                        # エラー履歴を保存
-                        save_conversion_history(
-                            st.session_state.get('user_id'),
-                            document_type,
-                            document_date.strftime('%Y-%m-%d') if document_date else None,
-                            uploaded_file.name,
-                            f"error: {str(e)}"
-                        )
-                else:
-                    st.error("本日の変換回数制限に達しました。プランをアップグレードすると、より多くの変換が可能です。")
+                if not st.session_state.processing_pdf:  # 処理中でない場合のみ実行
+                    if check_conversion_limit(st.session_state.get('user_id')):
+                        try:
+                            excel_data = process_pdf(uploaded_file, document_type, document_date)
+                            # 変換履歴を保存
+                            save_conversion_history(
+                                st.session_state.get('user_id'),
+                                document_type,
+                                document_date.strftime('%Y-%m-%d') if document_date else None,
+                                uploaded_file.name,
+                                "success"
+                            )
+                            # 変換回数を更新
+                            increment_conversion_count(st.session_state.get('user_id'))
+                            # 変換回数の表示を更新
+                            display_conversion_count()
+                            
+                            st.download_button(
+                                label="Excelファイルをダウンロード",
+                                data=excel_data,
+                                file_name=f"{get_document_type_label(document_type)}_{document_date.strftime('%Y-%m-%d') if document_date else 'unknown_date'}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                        except Exception as e:
+                            st.error(f"処理中にエラーが発生しました: {str(e)}")
+                            # エラー履歴を保存
+                            save_conversion_history(
+                                st.session_state.get('user_id'),
+                                document_type,
+                                document_date.strftime('%Y-%m-%d') if document_date else None,
+                                uploaded_file.name,
+                                f"error: {str(e)}"
+                            )
+                    else:
+                        st.error("本日の変換回数制限に達しました。プランをアップグレードすると、より多くの変換が可能です。")
     
     with col2:
         st.subheader("プレビュー")
@@ -828,7 +835,8 @@ def main():
 
 # メイン処理部分
 if st.session_state.conversion_success:
-    st.session_state.conversion_success = False  # フラグをリセット
+    st.session_state.conversion_success = False
+    st.session_state.rerun_count = 0
 
 if __name__ == "__main__":
     main() 
