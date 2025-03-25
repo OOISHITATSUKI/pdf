@@ -8,6 +8,10 @@ import os
 import re
 from datetime import datetime
 from openpyxl.utils import get_column_letter
+import uuid
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, String, DateTime, Enum, JSON, ForeignKey, Text
+from sqlalchemy.sql import func
 
 # ページ設定
 st.set_page_config(
@@ -1280,6 +1284,219 @@ def process_pdf_with_ocr(uploaded_file):
                 os.unlink(pdf_path)
             except:
                 pass
+
+def create_pricing_section():
+    """価格プランセクションの作成"""
+    st.markdown("""
+    <style>
+    .pricing-card {
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #e0e0e0;
+        margin: 10px 0;
+        background: white;
+    }
+    .pricing-card:hover {
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        transform: translateY(-2px);
+        transition: all 0.3s ease;
+    }
+    .price-tag {
+        font-size: 24px;
+        color: #1a73e8;
+        margin: 10px 0;
+    }
+    .price-note {
+        font-size: 14px;
+        color: #666;
+        font-style: italic;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.title("料金プラン")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        <div class="pricing-card">
+            <h3>ベーシックプラン</h3>
+            <div class="price-tag">$5 / 月</div>
+            <div class="price-note">※日本円換算：約¥700</div>
+            <ul>
+                <li>1日5ファイルまで変換可能</li>
+                <li>基本的なOCR機能</li>
+                <li>7日間のファイル保存</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if not st.session_state.user_state.get('is_premium'):
+            st.button("ベーシックプランに登録", key="basic_plan")
+
+    with col2:
+        st.markdown("""
+        <div class="pricing-card">
+            <h3>プロフェッショナルプラン</h3>
+            <div class="price-tag">$20 / 月</div>
+            <div class="price-note">※日本円換算：約¥2,800</div>
+            <ul>
+                <li>無制限の変換</li>
+                <li>高精度OCR</li>
+                <li>30日間のファイル保存</li>
+                <li>Google Drive連携</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if not st.session_state.user_state.get('is_premium'):
+            st.button("プロフェッショナルプランに登録", key="pro_plan")
+
+def create_upload_section():
+    """アップロードセクションの作成"""
+    st.markdown("""
+    <style>
+    .upload-area {
+        border: 2px dashed #1a73e8;
+        border-radius: 10px;
+        padding: 20px;
+        text-align: center;
+        background: #f8f9fa;
+        margin: 20px 0;
+    }
+    .upload-area:hover {
+        background: #e8f0fe;
+    }
+    .file-info {
+        padding: 10px;
+        background: white;
+        border-radius: 5px;
+        margin-top: 10px;
+    }
+    .error-message {
+        color: #dc3545;
+        padding: 10px;
+        border-radius: 5px;
+        background: #f8d7da;
+        margin: 10px 0;
+    }
+    .warning-message {
+        color: #856404;
+        padding: 10px;
+        border-radius: 5px;
+        background: #fff3cd;
+        margin: 10px 0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # 変換回数の表示
+    st.markdown("""
+    <div style="display: flex; align-items: center; margin-bottom: 20px;">
+        <span style="font-size: 1.2em;">📊 本日の残り変換回数：3/3回</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ファイルアップロード部分
+    uploaded_file = st.file_uploader(
+        "クリックまたはドラッグ＆ドロップでPDFファイルを選択",
+        type=['pdf'],
+        key="pdf_uploader"
+    )
+
+    if uploaded_file:
+        # ファイル情報の表示
+        st.markdown(f"""
+        <div class="file-info">
+            📄 {uploaded_file.name} ({round(uploaded_file.size/1024)} KB)
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 書類種類の選択
+        doc_type = st.selectbox(
+            "書類の種類を選択してください",
+            [
+                "選択してください",
+                "見積書",
+                "請求書",
+                "納品書",
+                "領収書",
+                "決算書",
+                "確定申告書",
+                "その他のPDF"
+            ]
+        )
+
+        # 日付入力
+        doc_date = st.text_input(
+            "書類の日付（YYYY/MM/DD形式）",
+            placeholder="例：2024/03/25"
+        )
+
+        # 変換ボタン
+        if st.button("Excelに変換する", disabled=doc_type=="選択してください"):
+            try:
+                with st.spinner("PDFを解析中..."):
+                    # PDFの処理
+                    result = process_pdf(
+                        uploaded_file,
+                        document_type=doc_type,
+                        document_date=doc_date
+                    )
+                    
+                    if result:
+                        st.success("変換が完了しました！")
+                        # ダウンロードボタンの表示
+                        st.download_button(
+                            label="Excelファイルをダウンロード",
+                            data=result,
+                            file_name=f"{uploaded_file.name}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+            except Exception as e:
+                st.error(f"変換中にエラーが発生しました: {str(e)}")
+
+def process_pdf(uploaded_file, document_type=None, document_date=None):
+    """PDFの処理を行う関数"""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
+            temp_pdf.write(uploaded_file.getvalue())
+            pdf_path = temp_pdf.name
+
+        with pdfplumber.open(pdf_path) as pdf:
+            # 1ページ目のみ処理（無料プラン）
+            page = pdf.pages[0]
+            
+            # テーブルの抽出
+            tables = page.extract_tables()
+            if not tables:
+                raise ValueError("テーブルが見つかりませんでした")
+
+            # Excelファイルの作成
+            wb = Workbook()
+            ws = wb.active
+            
+            # テーブルデータの書き込み
+            for i, row in enumerate(tables[0], 1):
+                for j, cell in enumerate(row, 1):
+                    if cell is not None:
+                        ws.cell(row=i, column=j, value=str(cell).strip())
+
+            # 一時ファイルとして保存
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
+                wb.save(temp_excel.name)
+                with open(temp_excel.name, 'rb') as f:
+                    excel_data = f.read()
+
+            # 一時ファイルの削除
+            os.unlink(pdf_path)
+            os.unlink(temp_excel.name)
+
+            return excel_data
+
+    except Exception as e:
+        raise Exception(f"PDFの処理中にエラーが発生しました: {str(e)}")
 
 def main():
     """メイン関数の修正"""
