@@ -184,8 +184,109 @@ st.markdown("""
     .stSpinner > div {
         border-color: #1E88E5 !important;
     }
+    
+    /* ヘッダー全体のスタイル */
+    .header-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem;
+        background-color: white;
+        border-bottom: 1px solid #f0f2f6;
+        margin-bottom: 2rem;
+    }
+    
+    /* タイトル部分のスタイル */
+    .header-title {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #0066cc;
+    }
+    
+    /* ユーザー状態表示部分のスタイル */
+    .user-status {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+    
+    .user-status-text {
+        font-size: 0.9rem;
+        color: #666;
+    }
+    
+    .premium-badge {
+        background-color: #ffd700;
+        color: #333;
+        padding: 0.2rem 0.5rem;
+        border-radius: 1rem;
+        font-size: 0.8rem;
+    }
+    
+    .free-badge {
+        background-color: #e0e0e0;
+        color: #333;
+        padding: 0.2rem 0.5rem;
+        border-radius: 1rem;
+        font-size: 0.8rem;
+    }
+    
+    .login-button {
+        background-color: #0066cc;
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 0.5rem;
+        text-decoration: none;
+        font-size: 0.9rem;
+    }
+    
+    .upgrade-button {
+        background-color: #ffd700;
+        color: #333;
+        padding: 0.3rem 0.8rem;
+        border-radius: 0.5rem;
+        text-decoration: none;
+        font-size: 0.9rem;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+def show_header():
+    """ヘッダーを表示する関数"""
+    header_html = """
+    <div class="header-container">
+        <div class="header-title">
+            PDF to Excel 変換ツール
+        </div>
+        <div class="user-status">
+    """
+    
+    if st.session_state.user_state['is_logged_in']:
+        if st.session_state.user_state['is_premium']:
+            header_html += """
+            <span class="premium-badge">🌟 プレミアム</span>
+            <span class="user-status-text">無制限で変換できます</span>
+            """
+        else:
+            remaining = 3 - st.session_state.user_state['daily_conversions']
+            header_html += f"""
+            <span class="free-badge">無料会員</span>
+            <span class="user-status-text">残り {remaining}回</span>
+            <a href="#" class="upgrade-button">🌟 プレミアムに変更</a>
+            """
+    else:
+        header_html += """
+        <a href="#" class="login-button">ログイン</a>
+        <span class="user-status-text">or</span>
+        <a href="#" class="login-button">新規登録</a>
+        """
+    
+    header_html += """
+        </div>
+    </div>
+    """
+    
+    st.markdown(header_html, unsafe_allow_html=True)
 
 # メインレイアウト
 st.markdown('<h1>PDF to Excel 変換ツール</h1>', unsafe_allow_html=True)
@@ -375,4 +476,9 @@ st.markdown("""
     <p>© 2025 PDF to Excel変換ツール</p>
     <p style="font-size: 0.9rem;">プライバシーを重視した無料のオンラインPDF変換サービス</p>
 </div>
-""", unsafe_allow_html=True) 
+""", unsafe_allow_html=True)
+
+show_header()  # ヘッダーの表示
+
+# 説明文
+st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。") 
