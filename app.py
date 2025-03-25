@@ -241,78 +241,92 @@ def extract_exact_layout(pdf_path):
         with pdfplumber.open(pdf_path) as pdf:
             page = pdf.pages[0]
             
-            # テキストとその詳細な属性を抽出
+            # 全ての要素を抽出
             texts = page.extract_words(
                 keep_blank_chars=True,
-                x_tolerance=3,
-                y_tolerance=3
+                x_tolerance=1,
+                y_tolerance=1
             )
             
-            # 詳細なテキスト情報の抽出
-            chars = page.chars
-            
-            # テキスト情報にフォントサイズを追加
-            for text in texts:
-                matching_chars = [
-                    char for char in chars
-                    if char['x0'] >= text['x0'] and char['x1'] <= text['x1']
-                    and char['top'] >= text['top'] and char['bottom'] <= text['bottom']
-                ]
-                
-                if matching_chars:
-                    text['size'] = sum(char.get('size', 11) for char in matching_chars) / len(matching_chars)
-                else:
-                    text['size'] = 11
-            
-            # 罫線情報の取得
+            # 罫線情報の取得と整理
             edges = page.edges
-            horizontals = [e for e in edges if e['orientation'] == 'horizontal']
-            verticals = [e for e in edges if e['orientation'] == 'vertical']
+            horizontals = sorted([e for e in edges if e['orientation'] == 'horizontal'], key=lambda x: x['y0'])
+            verticals = sorted([e for e in edges if e['orientation'] == 'vertical'], key=lambda x: x['x0'])
             
-            # セル結合の検出（罫線の交点から判定）
+            # グリッドの作成
+            grid = []
+            for i in range(len(horizontals) - 1):
+                row = []
+                for j in range(len(verticals) - 1):
+                    # セルの境界を定義
+                    cell = {
+                        'x0': verticals[j]['x0'],
+                        'x1': verticals[j + 1]['x0'],
+                        'y0': horizontals[i]['y0'],
+                        'y1': horizontals[i + 1]['y0'],
+                        'merged': False,
+                        'text': ''
+                    }
+                    
+                    # セル内のテキストを検索
+                    cell_texts = [
+                        t for t in texts
+                        if t['x0'] >= cell['x0'] - 2 and t['x1'] <= cell['x1'] + 2
+                        and t['top'] >= cell['y0'] - 2 and t['bottom'] <= cell['y1'] + 2
+                    ]
+                    
+                    if cell_texts:
+                        cell['text'] = ' '.join(t['text'] for t in cell_texts)
+                    
+                    row.append(cell)
+                grid.append(row)
+            
+            # セル結合の検出
             merged_cells = []
-            
-            # 横方向の結合を検出
-            for h in horizontals:
-                intersecting_verticals = sorted(
-                    [v for v in verticals if abs(v['y0'] - h['y0']) < 3],
-                    key=lambda x: x['x0']
-                )
-                
-                if len(intersecting_verticals) >= 2:
-                    for i in range(len(intersecting_verticals) - 1):
-                        v1, v2 = intersecting_verticals[i], intersecting_verticals[i + 1]
-                        # セル内にテキストがあるか確認
-                        cell_texts = [
-                            t for t in texts
-                            if t['x0'] >= v1['x0'] and t['x1'] <= v2['x0']
-                            and t['top'] >= h['y0'] - 5 and t['bottom'] <= h['y0'] + 20
-                        ]
+            for i in range(len(grid)):
+                for j in range(len(grid[i])):
+                    if grid[i][j]['merged']:
+                        continue
+                    
+                    # 横方向の結合を検出
+                    merge_width = 1
+                    while j + merge_width < len(grid[i]):
+                        next_cell = grid[i][j + merge_width]
+                        if next_cell['text'] == '' and not next_cell['merged']:
+                            merge_width += 1
+                        else:
+                            break
+                    
+                    # 縦方向の結合を検出
+                    merge_height = 1
+                    while i + merge_height < len(grid):
+                        next_row_cell = grid[i + merge_height][j]
+                        if next_row_cell['text'] == '' and not next_row_cell['merged']:
+                            merge_height += 1
+                        else:
+                            break
+                    
+                    # 結合セルとして記録
+                    if merge_width > 1 or merge_height > 1:
+                        merged_cell = {
+                            'start_row': i,
+                            'end_row': i + merge_height,
+                            'start_col': j,
+                            'end_col': j + merge_width,
+                            'text': grid[i][j]['text']
+                        }
+                        merged_cells.append(merged_cell)
                         
-                        if cell_texts:
-                            merged_cells.append({
-                                'top': h['y0'],
-                                'bottom': h['y0'] + 20,
-                                'left': v1['x0'],
-                                'right': v2['x0'],
-                                'text': ' '.join(t['text'] for t in cell_texts)
-                            })
-            
-            # テーブル構造の検出
-            tables = page.extract_tables(
-                table_settings={
-                    "vertical_strategy": "text",
-                    "horizontal_strategy": "text",
-                    "intersection_y_tolerance": 10,
-                    "intersection_x_tolerance": 10
-                }
-            )
+                        # 結合されたセルをマーク
+                        for mi in range(i, i + merge_height):
+                            for mj in range(j, j + merge_width):
+                                if mi < len(grid) and mj < len(grid[mi]):
+                                    grid[mi][mj]['merged'] = True
             
             return {
-                'texts': texts,
+                'grid': grid,
                 'merged_cells': merged_cells,
-                'edges': {'horizontal': horizontals, 'vertical': verticals},
-                'tables': tables
+                'edges': {'horizontal': horizontals, 'vertical': verticals}
             }
             
     except Exception as e:
@@ -330,72 +344,49 @@ def create_exact_excel_layout(layout_info, output_path):
         ws = wb.active
         ws.title = "完全レイアウト"
         
-        # グリッドの基本設定
-        default_row_height = 20
-        default_col_width = 10
+        # 基本の罫線スタイル
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
         
-        # テーブルデータの配置
-        if layout_info.get('tables'):
-            for table_idx, table in enumerate(layout_info['tables']):
-                for row_idx, row in enumerate(table):
-                    for col_idx, value in enumerate(row):
-                        if value is not None:
-                            cell = ws.cell(row=row_idx+1, column=col_idx+1, value=value)
-                            
-                            # 数値の場合は右寄せ
-                            if isinstance(value, (int, float)) or (isinstance(value, str) and value.replace(',', '').replace('¥', '').strip().isdigit()):
-                                cell.alignment = Alignment(horizontal='right')
-                            else:
-                                cell.alignment = Alignment(vertical='center')
-                            
-                            # 罫線の設定
-                            cell.border = Border(
-                                left=Side(style='thin'),
-                                right=Side(style='thin'),
-                                top=Side(style='thin'),
-                                bottom=Side(style='thin')
-                            )
-        
-        # テキストデータの配置
-        for text in layout_info['texts']:
-            row = int(text['top'] // default_row_height) + 1
-            col = int(text['x0'] // (default_col_width * 7)) + 1
-            
-            # 既存のセルの値を確認
-            existing_value = ws.cell(row=row, column=col).value
-            if existing_value is None:  # 空のセルの場合のみ値を設定
-                cell = ws.cell(row=row, column=col, value=text['text'])
-                
-                # フォントサイズの設定
-                font_size = min(max(int(text.get('size', 11)), 8), 16)
-                cell.font = Font(size=font_size)
-                
-                # 数値の右寄せ
-                if text['text'].replace(',', '').replace('¥', '').strip().isdigit():
-                    cell.alignment = Alignment(horizontal='right')
-                else:
-                    cell.alignment = Alignment(vertical='center')
+        # グリッドデータの配置
+        for i, row in enumerate(layout_info['grid']):
+            for j, cell in enumerate(row):
+                if not cell['merged']:
+                    excel_cell = ws.cell(row=i+1, column=j+1, value=cell['text'])
+                    
+                    # 数値の判定と右寄せ
+                    if cell['text'].replace(',', '').replace('¥', '').replace('(', '').replace(')', '').strip().isdigit():
+                        excel_cell.alignment = Alignment(horizontal='right', vertical='center')
+                    else:
+                        excel_cell.alignment = Alignment(horizontal='left', vertical='center')
+                    
+                    # 罫線の設定
+                    excel_cell.border = thin_border
         
         # セル結合の適用
-        for cell in layout_info['merged_cells']:
-            start_row = int(cell['top'] // default_row_height) + 1
-            end_row = int(cell['bottom'] // default_row_height) + 1
-            start_col = int(cell['left'] // (default_col_width * 7)) + 1
-            end_col = int(cell['right'] // (default_col_width * 7)) + 1
-            
-            if start_row < end_row or start_col < end_col:
-                try:
-                    ws.merge_cells(
-                        start_row=start_row,
-                        start_column=start_col,
-                        end_row=end_row,
-                        end_column=end_col
-                    )
-                    # 結合したセルにテキストを設定
-                    if 'text' in cell:
-                        ws.cell(row=start_row, column=start_col).value = cell['text']
-                except:
-                    continue
+        for merged_cell in layout_info['merged_cells']:
+            try:
+                ws.merge_cells(
+                    start_row=merged_cell['start_row'] + 1,
+                    start_column=merged_cell['start_col'] + 1,
+                    end_row=merged_cell['end_row'],
+                    end_column=merged_cell['end_col']
+                )
+                
+                # 結合したセルのスタイル設定
+                cell = ws.cell(
+                    row=merged_cell['start_row'] + 1,
+                    column=merged_cell['start_col'] + 1,
+                    value=merged_cell['text']
+                )
+                cell.alignment = Alignment(horizontal='left', vertical='center')
+                cell.border = thin_border
+            except:
+                continue
         
         # 列幅の自動調整
         for col in ws.columns:
@@ -409,6 +400,10 @@ def create_exact_excel_layout(layout_info, output_path):
                     pass
             adjusted_width = (max_length + 2) * 1.2
             ws.column_dimensions[column].width = adjusted_width
+        
+        # 行の高さを統一
+        for row in ws.rows:
+            ws.row_dimensions[row[0].row].height = 20
         
         wb.save(output_path)
         return True
