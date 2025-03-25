@@ -34,9 +34,18 @@ vision_client = vision.ImageAnnotatorClient()
 # ページ設定（必ず最初に実行）
 st.set_page_config(
     page_title="PDF to Excel 変換ツール",
-    page_icon="📄",
-    layout="wide"
+    page_icon="��",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
+
+# セッション状態の初期化
+if 'rerun_count' not in st.session_state:
+    st.session_state.rerun_count = 0
+if 'last_rerun_time' not in st.session_state:
+    st.session_state.last_rerun_time = datetime.now()
+if 'conversion_success' not in st.session_state:
+    st.session_state.conversion_success = False
 
 # データベースの設定
 DB_PATH = "pdf_converter.db"
@@ -542,8 +551,15 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
 
         # 変換成功時にカウントをインクリメント
         if increment_conversion_count(user_id):
+            st.session_state.conversion_success = True
             st.success("変換が完了しました！")
-            st.experimental_rerun()  # 画面を更新
+            # 再描画制御
+            current_time = datetime.now()
+            if (current_time - st.session_state.last_rerun_time).total_seconds() > 1:  # 1秒以上の間隔を確保
+                st.session_state.rerun_count += 1
+                if st.session_state.rerun_count <= 2:  # 最大2回まで再描画を許可
+                    st.session_state.last_rerun_time = current_time
+                    st.experimental_rerun()
         else:
             st.error("変換回数の更新に失敗しました。")
 
@@ -809,6 +825,10 @@ def main():
                 st.image(preview_image, use_container_width=True)
     
     create_footer()
+
+# メイン処理部分
+if st.session_state.conversion_success:
+    st.session_state.conversion_success = False  # フラグをリセット
 
 if __name__ == "__main__":
     main() 
