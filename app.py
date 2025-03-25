@@ -609,24 +609,78 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
     except Exception as e:
         raise Exception(f"PDFの処理中にエラーが発生しました: {str(e)}")
 
+def create_hero_section():
+    """ヒーローセクションを作成"""
+    st.title("PDF to Excel 変換ツール")
+    st.write("PDFファイルをかんたんにExcelに変換できます。")
+    st.write("請求書、決算書、納品書など、帳票をレイアウトそのままで変換可能。")
+    st.write("ブラウザ上で完結し、安心・安全にご利用いただけます。")
+
+def create_upload_section():
+    """アップロードセクションを作成"""
+    st.subheader("ファイルをアップロード")
+    
+    # 残り変換回数の表示
+    st.markdown("📊 本日の残り変換回数：3/3回")
+    
+    # ドキュメントタイプの選択
+    doc_type = st.selectbox(
+        "ドキュメントの種類を選択",
+        ["請求書", "見積書", "納品書", "確定申告書", "その他"]
+    )
+    
+    # 日付入力
+    doc_date = st.date_input("書類の日付", format="YYYY/MM/DD")
+    
+    # ファイルアップロード
+    uploaded_file = st.file_uploader(
+        "クリックまたはドラッグ&ドロップでPDFファイルを選択", 
+        type=['pdf'],
+        help="ファイルサイズの制限: 200MB"
+    )
+    
+    # 無料プランの注意書き
+    st.info("💡 無料プランでは1ページ目のみ変換されます。全ページ変換は有料プランでご利用いただけます。")
+    
+    if uploaded_file is not None:
+        if st.button("Excelに変換する"):
+            try:
+                excel_data = process_pdf(uploaded_file, doc_type, doc_date)
+                st.download_button(
+                    label="Excelファイルをダウンロード",
+                    data=excel_data,
+                    file_name="converted.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            except Exception as e:
+                st.error(f"処理中にエラーが発生しました: {str(e)}")
+
+def create_preview_section():
+    """プレビューセクションを作成"""
+    st.subheader("プレビュー")
+    # プレビュー領域のプレースホルダー
+    st.empty()
+
 def main():
-    """メイン関数の修正"""
-    # クエリパラメータからページを取得（experimental_get_query_paramsの置き換え）
-    current_page = st.query_params.get("page", "home")
+    """メイン関数"""
+    # ページ設定
+    st.set_page_config(
+        page_title="PDF to Excel 変換ツール",
+        page_icon="📄",
+        layout="wide"
+    )
     
-    # ページに応じてコンテンツを表示
-    if current_page == "security_policy":
-        create_security_policy_page()
-    elif current_page == "terms":
-        create_terms_page()
-    else:
-        create_hero_section()
-        show_auth_ui()
-        create_conversion_section()
-        show_ads()
+    # 各セクションの作成
+    create_hero_section()
     
-    # フッターは常に表示
-    show_footer()
+    # 2カラムレイアウト
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        create_upload_section()
+    
+    with col2:
+        create_preview_section()
 
 if __name__ == "__main__":
     initialize_session_state()
