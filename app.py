@@ -235,6 +235,123 @@ def create_excel_output(document_structure, output_path):
         st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
         return False
 
+def extract_exact_layout(pdf_path):
+    """PDFの完全なレイアウトを抽出してExcelに再現する"""
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            page = pdf.pages[0]
+            
+            # テキストとその詳細な属性を抽出
+            texts = page.extract_words(
+                keep_blank_chars=True,
+                x_tolerance=3,
+                y_tolerance=3,
+                extra_attrs=['size', 'font', 'fontname']
+            )
+            
+            # 罫線情報の取得
+            edges = page.edges
+            horizontals = [e for e in edges if e['orientation'] == 'horizontal']
+            verticals = [e for e in edges if e['orientation'] == 'vertical']
+            
+            # セル結合の検出
+            merged_cells = []
+            for h1 in horizontals:
+                for h2 in horizontals:
+                    if h1['x0'] == h2['x0'] and h1['x1'] == h2['x1'] and h1['y0'] < h2['y0']:
+                        v_left = [v for v in verticals if v['y0'] <= h1['y0'] and v['y1'] >= h2['y0'] and abs(v['x0'] - h1['x0']) < 3]
+                        v_right = [v for v in verticals if v['y0'] <= h1['y0'] and v['y1'] >= h2['y0'] and abs(v['x0'] - h1['x1']) < 3]
+                        if v_left and v_right:
+                            merged_cells.append({
+                                'top': h1['y0'],
+                                'bottom': h2['y0'],
+                                'left': h1['x0'],
+                                'right': h1['x1']
+                            })
+            
+            return {
+                'texts': texts,
+                'merged_cells': merged_cells,
+                'edges': {'horizontal': horizontals, 'vertical': verticals}
+            }
+    except Exception as e:
+        st.error(f"レイアウト抽出中にエラーが発生しました: {str(e)}")
+        return None
+
+def create_exact_excel_layout(layout_info, output_path):
+    """抽出したレイアウト情報を元にExcelファイルを作成"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "完全レイアウト"
+        
+        # セルの結合を適用
+        for cell in layout_info['merged_cells']:
+            start_col = int((cell['left'] - layout_info['edges']['vertical'][0]['x0']) // 50) + 1
+            end_col = int((cell['right'] - layout_info['edges']['vertical'][0]['x0']) // 50) + 1
+            start_row = int((cell['top'] - layout_info['edges']['horizontal'][0]['y0']) // 20) + 1
+            end_row = int((cell['bottom'] - layout_info['edges']['horizontal'][0]['y0']) // 20) + 1
+            
+            ws.merge_cells(
+                start_row=start_row,
+                start_column=start_col,
+                end_row=end_row,
+                end_column=end_col
+            )
+        
+        # テキストの配置
+        for text in layout_info['texts']:
+            col = int((text['x0'] - layout_info['edges']['vertical'][0]['x0']) // 50) + 1
+            row = int((text['top'] - layout_info['edges']['horizontal'][0]['y0']) // 20) + 1
+            
+            cell = ws.cell(row=row, column=col, value=text['text'])
+            
+            # フォントサイズの設定
+            font_size = int(float(text['size']))
+            cell.font = Font(size=font_size)
+            
+            # 文字揃えの設定
+            if '¥' in text['text'] or text['text'].replace(',', '').isdigit():
+                cell.alignment = Alignment(horizontal='right')
+            else:
+                cell.alignment = Alignment(vertical='center')
+        
+        # 罫線の設定
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        for row in ws.rows:
+            for cell in row:
+                cell.border = thin_border
+        
+        # 列幅の自動調整
+        for col in ws.columns:
+            max_length = 0
+            column = get_column_letter(col[0].column)
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            ws.column_dimensions[column].width = adjusted_width
+        
+        wb.save(output_path)
+        return True
+        
+    except Exception as e:
+        st.error(f"Excel作成中にエラーが発生しました: {str(e)}")
+        return False
+
 def process_pdf(uploaded_file):
     """PDFファイルを処理する"""
     try:
@@ -242,20 +359,29 @@ def process_pdf(uploaded_file):
             tmp_file.write(uploaded_file.getvalue())
             tmp_path = tmp_file.name
             
-            # 帳票構造の解析
+            # 既存の処理（カテゴリ分類）
             document_structure = analyze_document_structure(tmp_path)
-            if not document_structure:
-                return None
+            
+            # 完全なレイアウト抽出
+            layout_info = extract_exact_layout(tmp_path)
             
             # Excelファイルの作成
             excel_path = tmp_path.replace('.pdf', '.xlsx')
-            if create_excel_output(document_structure, excel_path):
-                return excel_path
             
-            return None
+            if document_structure and layout_info:
+                # 既存のシートを作成
+                create_excel_output(document_structure, excel_path)
+                
+                # 完全レイアウトシートを追加
+                create_exact_excel_layout(layout_info, excel_path.replace('.xlsx', '_exact.xlsx'))
+                
+                return excel_path, excel_path.replace('.xlsx', '_exact.xlsx')
+            
+            return None, None
+            
     except Exception as e:
         st.error(f"ファイル処理中にエラーが発生しました: {str(e)}")
-        return None
+        return None, None
     finally:
         if 'tmp_path' in locals():
             os.unlink(tmp_path)
@@ -284,28 +410,46 @@ def main():
             return
 
         with st.spinner('PDFを解析中...'):
-            excel_path = process_pdf(uploaded_file)
+            excel_path, exact_excel_path = process_pdf(uploaded_file)
             
-            if excel_path:
+            if excel_path and exact_excel_path:
                 st.success("変換が完了しました！")
                 
-                # プレビューの表示
+                # カテゴリ分類されたExcelのプレビュー
+                st.subheader("📊 カテゴリ分類データ")
                 excel_file = pd.ExcelFile(excel_path)
                 for sheet_name in excel_file.sheet_names:
-                    st.subheader(f"📊 {sheet_name}")
+                    st.write(f"シート: {sheet_name}")
                     df = pd.read_excel(excel_file, sheet_name=sheet_name)
                     st.dataframe(df)
                 
+                # 完全レイアウトExcelのプレビュー
+                st.subheader("📄 完全レイアウト")
+                exact_df = pd.read_excel(exact_excel_path)
+                st.dataframe(exact_df)
+                
                 # ダウンロードボタン
-                with open(excel_path, 'rb') as f:
-                    st.download_button(
-                        label="📥 Excelファイルをダウンロード",
-                        data=f,
-                        file_name=f'converted_{uploaded_file.name}.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    )
+                col1, col2 = st.columns(2)
+                with col1:
+                    with open(excel_path, 'rb') as f:
+                        st.download_button(
+                            label="📥 カテゴリ分類データをダウンロード",
+                            data=f,
+                            file_name=f'categorized_{uploaded_file.name}.xlsx',
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                        )
+                
+                with col2:
+                    with open(exact_excel_path, 'rb') as f:
+                        st.download_button(
+                            label="📥 完全レイアウトをダウンロード",
+                            data=f,
+                            file_name=f'exact_{uploaded_file.name}.xlsx',
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                        )
                 
                 os.remove(excel_path)
+                os.remove(exact_excel_path)
                 
                 if not st.session_state.user_state['is_premium']:
                     st.session_state.user_state['daily_conversions'] += 1
