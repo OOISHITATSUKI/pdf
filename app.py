@@ -241,38 +241,66 @@ def extract_exact_layout(pdf_path):
         with pdfplumber.open(pdf_path) as pdf:
             page = pdf.pages[0]
             
-            # テキストとその詳細な属性を抽出
+            # テキストとその詳細な属性を抽出（フォント関連の属性を修正）
             texts = page.extract_words(
                 keep_blank_chars=True,
                 x_tolerance=3,
-                y_tolerance=3,
-                extra_attrs=['size', 'font', 'fontname']
+                y_tolerance=3
             )
+            
+            # 詳細なテキスト情報の抽出
+            chars = page.chars
+            
+            # テキスト情報にフォントサイズを追加
+            for text in texts:
+                # テキストの位置に基づいて対応する文字を検索
+                matching_chars = [
+                    char for char in chars
+                    if char['x0'] >= text['x0'] and char['x1'] <= text['x1']
+                    and char['top'] >= text['top'] and char['bottom'] <= text['bottom']
+                ]
+                
+                # フォントサイズの平均を計算
+                if matching_chars:
+                    text['size'] = sum(char.get('size', 11) for char in matching_chars) / len(matching_chars)
+                else:
+                    text['size'] = 11  # デフォルトのフォントサイズ
             
             # 罫線情報の取得
             edges = page.edges
             horizontals = [e for e in edges if e['orientation'] == 'horizontal']
             verticals = [e for e in edges if e['orientation'] == 'vertical']
             
+            # テーブル構造の検出
+            tables = page.find_tables(
+                table_settings={
+                    "vertical_strategy": "text",
+                    "horizontal_strategy": "text",
+                    "intersection_y_tolerance": 10,
+                    "intersection_x_tolerance": 10
+                }
+            )
+            
             # セル結合の検出
             merged_cells = []
-            for h1 in horizontals:
-                for h2 in horizontals:
-                    if h1['x0'] == h2['x0'] and h1['x1'] == h2['x1'] and h1['y0'] < h2['y0']:
-                        v_left = [v for v in verticals if v['y0'] <= h1['y0'] and v['y1'] >= h2['y0'] and abs(v['x0'] - h1['x0']) < 3]
-                        v_right = [v for v in verticals if v['y0'] <= h1['y0'] and v['y1'] >= h2['y0'] and abs(v['x0'] - h1['x1']) < 3]
-                        if v_left and v_right:
+            if tables:
+                for table in tables:
+                    for cell in table.cells:
+                        if cell.rowspan > 1 or cell.colspan > 1:
                             merged_cells.append({
-                                'top': h1['y0'],
-                                'bottom': h2['y0'],
-                                'left': h1['x0'],
-                                'right': h1['x1']
+                                'top': cell.bbox[1],
+                                'bottom': cell.bbox[3],
+                                'left': cell.bbox[0],
+                                'right': cell.bbox[2],
+                                'rowspan': cell.rowspan,
+                                'colspan': cell.colspan
                             })
             
             return {
                 'texts': texts,
                 'merged_cells': merged_cells,
-                'edges': {'horizontal': horizontals, 'vertical': verticals}
+                'edges': {'horizontal': horizontals, 'vertical': verticals},
+                'tables': tables
             }
     except Exception as e:
         st.error(f"レイアウト抽出中にエラーが発生しました: {str(e)}")
@@ -282,55 +310,63 @@ def create_exact_excel_layout(layout_info, output_path):
     """抽出したレイアウト情報を元にExcelファイルを作成"""
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, Alignment, Border, Side
+        from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
         from openpyxl.utils import get_column_letter
         
         wb = Workbook()
         ws = wb.active
         ws.title = "完全レイアウト"
         
-        # セルの結合を適用
-        for cell in layout_info['merged_cells']:
-            start_col = int((cell['left'] - layout_info['edges']['vertical'][0]['x0']) // 50) + 1
-            end_col = int((cell['right'] - layout_info['edges']['vertical'][0]['x0']) // 50) + 1
-            start_row = int((cell['top'] - layout_info['edges']['horizontal'][0]['y0']) // 20) + 1
-            end_row = int((cell['bottom'] - layout_info['edges']['horizontal'][0]['y0']) // 20) + 1
-            
-            ws.merge_cells(
-                start_row=start_row,
-                start_column=start_col,
-                end_row=end_row,
-                end_column=end_col
-            )
+        # グリッドの作成（デフォルトのセルサイズを設定）
+        default_row_height = 20
+        default_col_width = 10
         
         # テキストの配置
         for text in layout_info['texts']:
-            col = int((text['x0'] - layout_info['edges']['vertical'][0]['x0']) // 50) + 1
-            row = int((text['top'] - layout_info['edges']['horizontal'][0]['y0']) // 20) + 1
+            # 位置の計算
+            col = int((text['x0']) // (default_col_width * 7)) + 1  # 7はおよそのピクセル/ポイント比
+            row = int((text['top']) // default_row_height) + 1
             
             cell = ws.cell(row=row, column=col, value=text['text'])
             
-            # フォントサイズの設定
-            font_size = int(float(text['size']))
+            # スタイルの設定
+            font_size = min(max(int(text.get('size', 11)), 8), 16)  # フォントサイズを8-16の範囲に制限
             cell.font = Font(size=font_size)
             
-            # 文字揃えの設定
-            if '¥' in text['text'] or text['text'].replace(',', '').isdigit():
+            # 数値の右寄せ
+            if text['text'].replace(',', '').replace('¥', '').strip().isdigit():
                 cell.alignment = Alignment(horizontal='right')
             else:
                 cell.alignment = Alignment(vertical='center')
         
-        # 罫線の設定
-        thin_border = Border(
-            left=Side(style='thin'),
-            right=Side(style='thin'),
-            top=Side(style='thin'),
-            bottom=Side(style='thin')
-        )
+        # テーブルの罫線を設定
+        if layout_info.get('tables'):
+            for table in layout_info['tables']:
+                for cell in table.cells:
+                    row = int(cell.bbox[1] // default_row_height) + 1
+                    col = int(cell.bbox[0] // (default_col_width * 7)) + 1
+                    excel_cell = ws.cell(row=row, column=col)
+                    excel_cell.border = Border(
+                        left=Side(style='thin'),
+                        right=Side(style='thin'),
+                        top=Side(style='thin'),
+                        bottom=Side(style='thin')
+                    )
         
-        for row in ws.rows:
-            for cell in row:
-                cell.border = thin_border
+        # セル結合の適用
+        for cell in layout_info['merged_cells']:
+            start_row = int(cell['top'] // default_row_height) + 1
+            end_row = int(cell['bottom'] // default_row_height) + 1
+            start_col = int(cell['left'] // (default_col_width * 7)) + 1
+            end_col = int(cell['right'] // (default_col_width * 7)) + 1
+            
+            if start_row < end_row or start_col < end_col:
+                ws.merge_cells(
+                    start_row=start_row,
+                    start_column=start_col,
+                    end_row=end_row,
+                    end_column=end_col
+                )
         
         # 列幅の自動調整
         for col in ws.columns:
@@ -342,7 +378,7 @@ def create_exact_excel_layout(layout_info, output_path):
                         max_length = len(str(cell.value))
                 except:
                     pass
-            adjusted_width = (max_length + 2)
+            adjusted_width = (max_length + 2) * 1.2  # 少し余裕を持たせる
             ws.column_dimensions[column].width = adjusted_width
         
         wb.save(output_path)
