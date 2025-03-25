@@ -714,6 +714,70 @@ def create_hero_section():
     ブラウザ上で完結し、安心・安全にご利用いただけます。
     """)
 
+def process_and_show_results(uploaded_file):
+    """PDFの処理と結果の表示を行う"""
+    try:
+        with st.spinner('PDFを解析中...'):
+            normal_path, layout_path = process_pdf(uploaded_file)
+            
+            if normal_path or layout_path:
+                st.success("変換が完了しました！")
+                
+                # 通常版の表示
+                if normal_path and os.path.exists(normal_path):
+                    st.subheader("📊 通常データ")
+                    try:
+                        df = pd.read_excel(normal_path)
+                        st.dataframe(df)
+                        
+                        # ダウンロードボタン
+                        with open(normal_path, 'rb') as f:
+                            st.download_button(
+                                label="📥 通常データをダウンロード",
+                                data=f,
+                                file_name=f'normal_{uploaded_file.name}.xlsx',
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
+                    except Exception as e:
+                        st.error(f"通常データの表示中にエラーが発生しました: {str(e)}")
+                
+                # レイアウト版の表示
+                if layout_path and os.path.exists(layout_path):
+                    st.subheader("📄 完全レイアウト")
+                    try:
+                        df = pd.read_excel(layout_path)
+                        st.dataframe(df)
+                        
+                        # ダウンロードボタン
+                        with open(layout_path, 'rb') as f:
+                            st.download_button(
+                                label="📥 完全レイアウトをダウンロード",
+                                data=f,
+                                file_name=f'layout_{uploaded_file.name}.xlsx',
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
+                    except Exception as e:
+                        st.error(f"レイアウトデータの表示中にエラーが発生しました: {str(e)}")
+                
+                # 変換回数のカウントアップ
+                if not st.session_state.user_state['is_premium']:
+                    st.session_state.user_state['daily_conversions'] += 1
+                
+                # 一時ファイルの削除
+                try:
+                    if normal_path and os.path.exists(normal_path):
+                        os.unlink(normal_path)
+                    if layout_path and os.path.exists(layout_path):
+                        os.unlink(layout_path)
+                except:
+                    pass
+            
+            else:
+                st.error("PDFの変換に失敗しました。")
+                
+    except Exception as e:
+        st.error(f"処理中にエラーが発生しました: {str(e)}")
+
 def create_conversion_section():
     """変換セクションの作成"""
     col1, col2 = st.columns([1, 1])
@@ -725,6 +789,7 @@ def create_conversion_section():
         current_date = datetime.now().date()
         if st.session_state.user_state['last_conversion_date'] != current_date:
             st.session_state.user_state['daily_conversions'] = 0
+            st.session_state.user_state['last_conversion_date'] = current_date
         
         if st.session_state.user_state['is_premium']:
             limit_text = "無制限"
