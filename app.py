@@ -218,7 +218,7 @@ def create_preview_section(uploaded_file):
     if uploaded_file is not None:
         preview_image = create_preview(uploaded_file)
         if preview_image is not None:
-            st.image(preview_image, use_column_width=True)
+            st.image(preview_image, use_container_width=True)
 
 def create_upload_section():
     """アップロードセクションを作成"""
@@ -381,19 +381,32 @@ def create_document_type_buttons():
     # ボタンのスタイル
     button_style = """
         <style>
-        .stButton button {
+        div[data-testid="stHorizontalBlock"] > div:first-child button,
+        div[data-testid="stHorizontalBlock"] > div:nth-child(2) button {
             width: 100%;
-            margin: 5px 0;
-            border: 1px solid #ddd;
-            background-color: white;
+            min-height: 60px;  /* ボタンの高さを1.5倍に */
+            margin: 8px 0;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            background: linear-gradient(145deg, #ffffff 0%, #f5f5f5 100%);
+            font-size: 16px;
+            color: #333;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        .stButton button:hover {
-            border-color: #4CAF50;
-            background-color: #f0f0f0;
+        
+        div[data-testid="stHorizontalBlock"] button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+            border-color: #2196F3;
+            background: linear-gradient(145deg, #f5f5f5 0%, #e3f2fd 100%);
         }
-        .selected {
-            border-color: #4CAF50 !important;
-            background-color: #e8f5e9 !important;
+        
+        .selected-button {
+            border-color: #2196F3 !important;
+            background: linear-gradient(145deg, #e3f2fd 0%, #bbdefb 100%) !important;
+            color: #1565C0 !important;
+            box-shadow: 0 4px 8px rgba(33,150,243,0.2) !important;
         }
         </style>
     """
@@ -415,14 +428,26 @@ def create_document_type_buttons():
     selected = False
     for i, (label, value) in enumerate(document_types.items()):
         with col1 if i % 2 == 0 else col2:
+            # 選択状態に応じてクラスを追加
+            button_class = "selected-button" if st.session_state.selected_document_type == value else ""
+            button_html = f"""
+                <button 
+                    class="{button_class}"
+                    onclick="this.blur();"
+                    data-value="{value}"
+                >
+                    {label}
+                </button>
+            """
             if st.button(
                 label,
                 key=f"doc_type_{value}",
                 help=f"{label}を選択",
-                type="secondary" if st.session_state.selected_document_type != value else "primary"
+                use_container_width=True  # use_column_widthの代わりに使用
             ):
                 st.session_state.selected_document_type = value
                 selected = True
+                st.experimental_rerun()  # 選択状態を即時反映
     
     if not selected and st.session_state.selected_document_type is None:
         st.warning("書類の種類を選択してください")
@@ -514,7 +539,7 @@ def main():
         if uploaded_file is not None:
             preview_image = create_preview(uploaded_file)
             if preview_image is not None:
-                st.image(preview_image, use_column_width=True)
+                st.image(preview_image, use_container_width=True)
     
     create_footer()
 
