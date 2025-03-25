@@ -7,6 +7,7 @@ import tempfile
 import os
 import re
 from datetime import datetime
+from openpyxl.utils import get_column_letter
 
 # ページ設定
 st.set_page_config(
@@ -235,6 +236,7 @@ def create_layout_excel(layout_info, output_path):
         
         wb = Workbook()
         ws = wb.active
+        ws.title = "完全レイアウト"
         
         # 罫線スタイル
         thin_border = Border(
@@ -244,36 +246,67 @@ def create_layout_excel(layout_info, output_path):
             bottom=Side(style='thin')
         )
         
-        # セルの配置
-        max_row = 0
-        max_col = 0
-        
-        for cell in layout_info['cells']:
-            row = cell['row'] + 1
-            col = cell['col'] + 1
-            max_row = max(max_row, row)
-            max_col = max(max_col, col)
+        # テキストの配置
+        for text in layout_info['texts']:
+            # 座標を行と列に変換
+            row = int(text['top'] // 20) + 1  # 20ピクセルを1行とする
+            col = int(text['x0'] // 50) + 1   # 50ピクセルを1列とする
             
-            ws.cell(row=row, column=col, value=cell['text'])
+            cell = ws.cell(row=row, column=col, value=text['text'])
             
             # スタイルの適用
-            current_cell = ws.cell(row=row, column=col)
-            current_cell.border = thin_border
+            cell.border = thin_border
             
             # 数値の場合は右寄せ
-            if str(cell['text']).replace(',', '').replace('¥', '').replace('(', '').replace(')', '').strip().isdigit():
-                current_cell.alignment = Alignment(horizontal='right', vertical='center')
+            if text['text'].replace(',', '').replace('¥', '').replace('(', '').replace(')', '').strip().isdigit():
+                cell.alignment = Alignment(horizontal='right', vertical='center')
             else:
-                current_cell.alignment = Alignment(vertical='center')
+                cell.alignment = Alignment(horizontal='left', vertical='center')
+        
+        # 罫線の配置
+        if layout_info['edges']:
+            # 水平線
+            for h_line in layout_info['edges']['horizontal']:
+                row = int(h_line['y0'] // 20) + 1
+                start_col = int(h_line['x0'] // 50) + 1
+                end_col = int(h_line['x1'] // 50) + 1
+                
+                for col in range(start_col, end_col + 1):
+                    cell = ws.cell(row=row, column=col)
+                    if not cell.value:
+                        cell.value = ''
+                    cell.border = thin_border
+            
+            # 垂直線
+            for v_line in layout_info['edges']['vertical']:
+                col = int(v_line['x0'] // 50) + 1
+                start_row = int(v_line['y0'] // 20) + 1
+                end_row = int(v_line['y1'] // 20) + 1
+                
+                for row in range(start_row, end_row + 1):
+                    cell = ws.cell(row=row, column=col)
+                    if not cell.value:
+                        cell.value = ''
+                    cell.border = thin_border
         
         # 列幅の調整
-        for col in range(1, max_col + 1):
-            ws.column_dimensions[get_column_letter(col)].width = 15
+        for col in ws.columns:
+            max_length = 0
+            column = get_column_letter(col[0].column)
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2) * 1.2
+            ws.column_dimensions[column].width = adjusted_width
         
         # 行の高さを統一
-        for row in range(1, max_row + 1):
-            ws.row_dimensions[row].height = 20
+        for row in ws.rows:
+            ws.row_dimensions[row[0].row].height = 20
         
+        # ファイルを保存
         wb.save(output_path)
         return True
         
@@ -502,7 +535,7 @@ def main():
                         df = pd.read_excel(normal_path)
                         st.dataframe(df)
                     except Exception as e:
-                        st.error("通常データの表示中にエラーが発生しました")
+                        st.error(f"通常データの表示中にエラーが発生しました: {str(e)}")
                 
                 # レイアウト版の表示
                 if layout_path and os.path.exists(layout_path):
@@ -511,7 +544,7 @@ def main():
                         df = pd.read_excel(layout_path)
                         st.dataframe(df)
                     except Exception as e:
-                        st.error("レイアウトデータの表示中にエラーが発生しました")
+                        st.error(f"レイアウトデータの表示中にエラーが発生しました: {str(e)}")
                 
                 # ダウンロードボタン
                 col1, col2 = st.columns(2)
@@ -519,9 +552,10 @@ def main():
                 with col1:
                     if normal_path and os.path.exists(normal_path):
                         with open(normal_path, 'rb') as f:
+                            normal_data = f.read()
                             st.download_button(
                                 label="📥 通常データをダウンロード",
-                                data=f,
+                                data=normal_data,
                                 file_name=f'normal_{uploaded_file.name}.xlsx',
                                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                             )
@@ -529,9 +563,10 @@ def main():
                 with col2:
                     if layout_path and os.path.exists(layout_path):
                         with open(layout_path, 'rb') as f:
+                            layout_data = f.read()
                             st.download_button(
                                 label="📥 完全レイアウトをダウンロード",
-                                data=f,
+                                data=layout_data,
                                 file_name=f'layout_{uploaded_file.name}.xlsx',
                                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                             )
