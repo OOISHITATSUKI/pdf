@@ -524,4 +524,206 @@ def process_pdf(uploaded_file):
 
     except Exception as e:
         st.error(f"ファイルの処理中にエラーが発生しました: {str(e)}")
-        return None 
+        return None
+
+def extract_pdf_content(pdf_path):
+    """PDFから詳細な情報を抽出する関数"""
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            document_info = {
+                'tables': [],
+                'titles': [],
+                'metadata': {},
+                'styles': []
+            }
+            
+            # PDFのメタデータを取得
+            document_info['metadata'] = pdf.metadata
+            
+            for page_num, page in enumerate(pdf.pages, 1):
+                # ページの基本情報
+                page_info = {
+                    'page_number': page_num,
+                    'page_size': {'width': page.width, 'height': page.height}
+                }
+                
+                # テキスト要素の抽出（文字サイズ、フォント情報を含む）
+                words = page.extract_words(
+                    keep_blank_chars=True,
+                    x_tolerance=3,
+                    y_tolerance=3,
+                    extra_attrs=['fontname', 'size']
+                )
+                
+                # タイトルらしき要素の検出（文字サイズが大きい要素）
+                for word in words:
+                    if word.get('size', 0) > 12:  # サイズの閾値は調整可能
+                        document_info['titles'].append({
+                            'text': word['text'],
+                            'size': word['size'],
+                            'font': word.get('fontname', 'unknown'),
+                            'page': page_num
+                        })
+                
+                # テーブルの詳細な抽出
+                tables = page.find_tables(
+                    table_settings={
+                        "vertical_strategy": "text",
+                        "horizontal_strategy": "text",
+                        "snap_tolerance": 3,
+                        "join_tolerance": 3,
+                        "edge_min_length": 3,
+                        "min_words_vertical": 3,
+                        "min_words_horizontal": 1,
+                        "keep_blank_chars": True,
+                        "text_tolerance": 3,
+                        "text_x_tolerance": 3,
+                        "text_y_tolerance": 3
+                    }
+                )
+                
+                for table in tables:
+                    table_data = table.extract()
+                    if table_data:
+                        # セル結合の検出
+                        merged_cells = []
+                        for i, row in enumerate(table_data):
+                            for j, cell in enumerate(row):
+                                if cell is not None:
+                                    # 横方向の結合を検出
+                                    span = 1
+                                    while j + span < len(row) and row[j + span] is None:
+                                        span += 1
+                                    if span > 1:
+                                        merged_cells.append({
+                                            'type': 'horizontal',
+                                            'row': i,
+                                            'col': j,
+                                            'span': span,
+                                            'value': cell
+                                        })
+                        
+                        document_info['tables'].append({
+                            'page': page_num,
+                            'data': table_data,
+                            'merged_cells': merged_cells,
+                            'position': {
+                                'top': table.bbox[1],
+                                'left': table.bbox[0],
+                                'bottom': table.bbox[3],
+                                'right': table.bbox[2]
+                            }
+                        })
+                
+                # スタイル情報の収集
+                document_info['styles'].append({
+                    'page': page_num,
+                    'fonts': list(set(word.get('fontname', 'unknown') for word in words)),
+                    'sizes': list(set(word.get('size', 0) for word in words))
+                })
+            
+            return document_info
+    
+    except Exception as e:
+        st.error(f"PDFの解析中にエラーが発生しました: {str(e)}")
+        return None
+
+def create_excel_with_formatting(document_info, output_path):
+    """抽出した情報をフォーマット付きでExcelに出力"""
+    try:
+        writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
+        workbook = writer.book
+        
+        # スタイルの定義
+        title_format = workbook.add_format({
+            'bold': True,
+            'font_size': 14,
+            'align': 'center'
+        })
+        
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#D9D9D9',
+            'border': 1
+        })
+        
+        # メタデータシートの作成
+        metadata_df = pd.DataFrame([document_info['metadata']])
+        metadata_df.to_excel(writer, sheet_name='メタデータ', index=False)
+        
+        # テーブルデータの出力
+        for i, table_info in enumerate(document_info['tables']):
+            sheet_name = f'テーブル{i+1}'
+            df = pd.DataFrame(table_info['data'])
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+            
+            worksheet = writer.sheets[sheet_name]
+            
+            # セル結合の適用
+            for merge in table_info['merged_cells']:
+                if merge['type'] == 'horizontal':
+                    worksheet.merge_range(
+                        merge['row'] + 1, merge['col'],
+                        merge['row'] + 1, merge['col'] + merge['span'] - 1,
+                        merge['value']
+                    )
+        
+        # タイトル情報の出力
+        titles_df = pd.DataFrame(document_info['titles'])
+        if not titles_df.empty:
+            titles_df.to_excel(writer, sheet_name='タイトル一覧', index=False)
+        
+        writer.close()
+        return True
+    
+    except Exception as e:
+        st.error(f"Excel作成中にエラーが発生しました: {str(e)}")
+        return False
+
+# メイン処理部分の更新
+def process_pdf_file(uploaded_file):
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_path = tmp_file.name
+            
+            # 詳細な情報を抽出
+            document_info = extract_pdf_content(tmp_path)
+            
+            if document_info:
+                # Excel出力用の一時ファイル
+                excel_path = f'converted_{uploaded_file.name}.xlsx'
+                
+                if create_excel_with_formatting(document_info, excel_path):
+                    # プレビュー表示
+                    st.success("変換が完了しました！")
+                    
+                    # タイトル情報の表示
+                    if document_info['titles']:
+                        st.write("検出されたタイトル:")
+                        for title in document_info['titles']:
+                            st.write(f"- {title['text']} (サイズ: {title['size']})")
+                    
+                    # テーブル情報の表示
+                    for i, table in enumerate(document_info['tables']):
+                        st.write(f"テーブル {i+1}:")
+                        df = pd.DataFrame(table['data'])
+                        st.dataframe(df)
+                    
+                    # ダウンロードボタン
+                    with open(excel_path, 'rb') as f:
+                        st.download_button(
+                            label="📥 Excelファイルをダウンロード",
+                            data=f,
+                            file_name=excel_path,
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                        )
+                    
+                    # 一時ファイルの削除
+                    os.remove(excel_path)
+            
+            # PDF一時ファイルの削除
+            os.remove(tmp_path)
+            
+    except Exception as e:
+        st.error(f"処理中にエラーが発生しました: {str(e)}") 
