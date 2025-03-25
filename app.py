@@ -1041,7 +1041,13 @@ def create_invoice_summary(layout_info):
 
 def create_security_policy_page():
     """セキュリティーポリシーページの作成"""
-    st.title("セキュリティーポリシー")
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("← 戻る"):
+            st.query_params.clear()
+            st.rerun()
+    with col2:
+        st.title("セキュリティーポリシー")
     
     st.markdown("""
     当サービス（以下、「本サービス」）では、ユーザーのファイルおよび個人情報の安全を守るために、以下のポリシーに従って運営を行っております。
@@ -1072,7 +1078,13 @@ def create_security_policy_page():
 
 def create_terms_page():
     """利用規約ページの作成"""
-    st.title("利用規約")
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("← 戻る"):
+            st.query_params.clear()
+            st.rerun()
+    with col2:
+        st.title("利用規約")
     
     st.markdown("""
     この利用規約（以下、「本規約」）は、本サービスの利用条件を定めるものです。
