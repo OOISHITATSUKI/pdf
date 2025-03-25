@@ -705,76 +705,123 @@ def create_combined_layout_excel(results, output_path):
         st.error(f"Excel作成中にエラーが発生しました: {str(e)}")
         return False
 
-# メインアプリケーション
-def main():
-    show_auth_ui()
-    
+def create_hero_section():
+    """ヒーローセクションの作成"""
     st.title("PDF to Excel 変換ツール")
-    st.markdown("PDFファイルをExcel形式に変換できます。")
+    st.markdown("""
+    PDFファイルをかんたんにExcelに変換できます。  
+    請求書、決算書、納品書など、帳票をレイアウトそのままで変換可能。  
+    ブラウザ上で完結し、安心・安全にご利用いただけます。
+    """)
+
+def create_conversion_section():
+    """変換セクションの作成"""
+    col1, col2 = st.columns([1, 1])
     
-    uploaded_file = st.file_uploader("PDFファイルを選択", type=['pdf'])
+    with col1:
+        st.markdown("### ファイルをアップロード")
+        
+        # 利用制限の表示
+        current_date = datetime.now().date()
+        if st.session_state.user_state['last_conversion_date'] != current_date:
+            st.session_state.user_state['daily_conversions'] = 0
+        
+        if st.session_state.user_state['is_premium']:
+            limit_text = "無制限"
+        elif st.session_state.user_state['is_logged_in']:
+            remaining = 5 - st.session_state.user_state['daily_conversions']
+            limit_text = f"本日：残り {remaining} / 5 ファイル"
+        else:
+            remaining = 3 - st.session_state.user_state['daily_conversions']
+            limit_text = f"本日：残り {remaining} / 3 ファイル"
+        
+        st.markdown(f"📊 {limit_text}")
+        
+        # ファイルアップロード
+        uploaded_file = st.file_uploader(
+            "クリックまたはドラッグ＆ドロップでPDFファイルを選択",
+            type=['pdf'],
+            accept_multiple_files=st.session_state.user_state['is_premium']
+        )
+        
+        # プラン説明
+        st.markdown("""
+        #### 利用可能回数
+        - 無料（未登録）：1日3ファイルまで
+        - 無料（登録済）：1日5ファイルまで
+        - 有料プラン（月額500円）：無制限＋保存機能付き
+        
+        [無料プランと有料プランの違いを見る](javascript:void(0))
+        """)
+        
+        if uploaded_file:
+            if st.button("Excelに変換する", disabled=not check_conversion_limit()):
+                process_and_show_results(uploaded_file)
     
-    if uploaded_file:
-        with st.spinner('PDFを解析中...'):
-            path1, path2 = process_pdf(uploaded_file)
+    with col2:
+        st.markdown("### プレビュー")
+        if uploaded_file:
+            show_pdf_preview(uploaded_file)
+        else:
+            st.info("PDFファイルをアップロードすると、ここにプレビューが表示されます")
+
+def show_pdf_preview(uploaded_file):
+    """PDFのプレビュー表示"""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
             
-            if path1:
-                st.success("変換が完了しました！")
+            with pdfplumber.open(tmp_file.name) as pdf:
+                page = pdf.pages[0]
+                img = page.to_image()
+                preview_path = tmp_file.name + '.png'
+                img.save(preview_path)
                 
-                try:
-                    # 確定申告書の場合
-                    if 'tax_return' in path1:
-                        st.subheader("📊 確定申告書データ")
-                        df = pd.read_excel(path1)
-                        st.dataframe(df)
-                        
-                        with open(path1, 'rb') as f:
-                            st.download_button(
-                                label="📥 確定申告書データをダウンロード",
-                                data=f,
-                                file_name=f'tax_return_{uploaded_file.name}.xlsx',
-                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                            )
-                    # 通常のPDFの場合
-                    else:
-                        st.subheader("📊 通常データ")
-                        df1 = pd.read_excel(path1)
-                        st.dataframe(df1)
-                        
-                        if path2:
-                            st.subheader("📄 完全レイアウト")
-                            df2 = pd.read_excel(path2)
-                            st.dataframe(df2)
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            with open(path1, 'rb') as f:
-                                st.download_button(
-                                    label="📥 通常データをダウンロード",
-                                    data=f,
-                                    file_name=f'normal_{uploaded_file.name}.xlsx',
-                                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                                )
-                        
-                        if path2:
-                            with col2:
-                                with open(path2, 'rb') as f:
-                                    st.download_button(
-                                        label="📥 完全レイアウトをダウンロード",
-                                        data=f,
-                                        file_name=f'layout_{uploaded_file.name}.xlsx',
-                                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                                    )
+                st.image(preview_path)
                 
-                finally:
-                    # 一時ファイルの削除
-                    try:
-                        if os.path.exists(path1):
-                            os.unlink(path1)
-                        if path2 and os.path.exists(path2):
-                            os.unlink(path2)
-                    except:
-                        pass
+                os.unlink(preview_path)
+            
+            os.unlink(tmp_file.name)
+    except Exception as e:
+        st.error("プレビューの表示中にエラーが発生しました")
+
+def show_ads():
+    """広告の表示"""
+    if not st.session_state.user_state['is_premium']:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("""
+            <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; text-align: center;">
+                広告スペース
+            </div>
+            """, unsafe_allow_html=True)
+        with col2:
+            st.markdown("""
+            <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; text-align: center;">
+                広告スペース
+            </div>
+            """, unsafe_allow_html=True)
+
+def show_footer():
+    """フッターの表示"""
+    st.markdown("---")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown("[よくある質問（FAQ）](javascript:void(0))")
+    with col2:
+        st.markdown("[サポート対象PDF一覧](javascript:void(0))")
+    with col3:
+        st.markdown("[セキュリティポリシー](javascript:void(0))")
+    with col4:
+        st.markdown("[利用規約](javascript:void(0))")
+
+def main():
+    create_hero_section()
+    show_auth_ui()
+    create_conversion_section()
+    show_ads()
+    show_footer()
 
 if __name__ == "__main__":
     main() 
