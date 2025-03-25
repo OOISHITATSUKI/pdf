@@ -1040,9 +1040,9 @@ def create_invoice_summary(layout_info):
         return None
 
 def main():
-    # クエリパラメータからページを取得
-    query_params = st.experimental_get_query_params()
-    current_page = query_params.get("page", ["home"])[0]
+    """メイン関数の修正"""
+    # クエリパラメータからページを取得（experimental_get_query_paramsの置き換え）
+    current_page = st.query_params.get("page", "home")
     
     # ページに応じてコンテンツを表示
     if current_page == "security_policy":
