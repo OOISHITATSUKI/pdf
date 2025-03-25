@@ -22,20 +22,17 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Set
 from openpyxl.cell.cell import MergedCell
 import hashlib
-from google.cloud import vision
+import base64
+import requests
 from dotenv import load_dotenv
 
 # 環境変数の読み込み
 load_dotenv()
 
-# Google Cloud Vision APIの初期化
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.getenv('GOOGLE_VISION_API_KEY')
-vision_client = vision.ImageAnnotatorClient()
-
 # ページ設定（必ず最初に実行）
 st.set_page_config(
     page_title="PDF to Excel 変換ツール",
-    page_icon="��",
+    page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -467,15 +464,46 @@ def get_conversion_limit(user_id=None):
 def process_pdf_with_ocr(image_bytes, document_type):
     """Google Cloud Vision APIを使用してOCR処理を実行"""
     try:
-        image = vision.Image(content=image_bytes)
-        response = vision_client.text_detection(image=image)
-        texts = response.text_annotations
-
-        if not texts:
+        # 画像をbase64エンコード
+        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+        
+        # APIキーの取得
+        api_key = os.getenv('GOOGLE_VISION_API_KEY')
+        if not api_key:
+            st.error("APIキーが設定されていません。")
             return None
 
-        # テキストを整形して返す
-        return texts[0].description
+        # APIエンドポイントの設定
+        url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
+        headers = {"Content-Type": "application/json"}
+        
+        # リクエストデータの作成
+        data = {
+            "requests": [{
+                "image": {"content": image_base64},
+                "features": [{"type": "DOCUMENT_TEXT_DETECTION"}]
+            }]
+        }
+
+        # APIリクエストの送信
+        response = requests.post(url, headers=headers, json=data)
+        
+        # レスポンスの確認
+        if response.status_code != 200:
+            st.error(f"APIリクエストが失敗しました: {response.status_code}")
+            return None
+
+        # レスポンスの解析
+        result = response.json()
+        
+        # テキストの抽出
+        if 'responses' in result and result['responses']:
+            text_annotations = result['responses'][0].get('textAnnotations', [])
+            if text_annotations:
+                return text_annotations[0].get('description', '')
+        
+        return None
+
     except Exception as e:
         st.error(f"OCR処理中にエラーが発生しました: {str(e)}")
         return None
