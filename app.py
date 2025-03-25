@@ -398,22 +398,30 @@ def is_tax_return_pdf(pdf_path):
 def process_tax_return_pdf(page):
     """確定申告書専用の処理"""
     try:
-        import fitz  # PyMuPDF
-        
-        # PyMuPDFでテキスト抽出を試みる
-        doc = fitz.open(page._pdf.stream)
-        page_obj = doc[page.page_number]
+        # PyMuPDFの代わりにpdfplumberを使用
+        text = page.extract_text(
+            x_tolerance=1,
+            y_tolerance=1,
+            layout=True,
+            keep_blank_chars=False,
+            use_text_flow=True,
+            horizontal_ltr=True,
+            vertical_ttb=True,
+            extra_attrs=['fontname', 'size']
+        )
         
         # テキストブロックを抽出
-        blocks = page_obj.get_text("blocks")
-        processed_blocks = []
-        
-        for block in blocks:
-            text = block[4]
-            # CIDフォントの処理
-            text = re.sub(r'\(cid:\d+\)', '', text)
-            
-            if text.strip():
+        blocks = []
+        for word in page.extract_words(
+            keep_blank_chars=False,
+            x_tolerance=1,
+            y_tolerance=1,
+            extra_attrs=['fontname', 'size']
+        ):
+            if word['text'].strip():
+                # CIDフォントの処理
+                text = re.sub(r'\(cid:\d+\)', '', word['text'])
+                
                 # 数値の処理
                 numbers = re.findall(r'[\d,]+', text)
                 for num in numbers:
@@ -423,10 +431,11 @@ def process_tax_return_pdf(page):
                     except ValueError:
                         continue
                 
-                processed_blocks.append({
+                blocks.append({
                     'text': text.strip(),
-                    'bbox': block[:4],
-                    'block_type': block[6]
+                    'bbox': (word['x0'], word['top'], word['x1'], word['bottom']),
+                    'fontname': word.get('fontname', ''),
+                    'size': word.get('size', 0)
                 })
         
         # テンプレート認識（様式番号に基づく）
@@ -439,7 +448,7 @@ def process_tax_return_pdf(page):
         
         form_type = None
         for key, pattern in form_patterns.items():
-            if any(re.search(pattern, block['text']) for block in processed_blocks):
+            if any(re.search(pattern, block['text']) for block in blocks):
                 form_type = key
                 break
         
@@ -453,7 +462,7 @@ def process_tax_return_pdf(page):
             current_y = None
             y_tolerance = 5
             
-            for block in processed_blocks:
+            for block in blocks:
                 if current_y is None:
                     current_y = block['bbox'][1]
                     current_table.append(block)
@@ -472,7 +481,7 @@ def process_tax_return_pdf(page):
             
         else:
             st.warning("⚠️ 申告書の種類を特定できませんでした。一般的なPDFとして処理します。")
-            return processed_blocks
+            return blocks
             
     except Exception as e:
         st.error(f"確定申告書の処理中にエラーが発生しました: {str(e)}")
