@@ -398,69 +398,82 @@ def is_tax_return_pdf(pdf_path):
 def process_tax_return_pdf(page):
     """確定申告書専用の処理"""
     try:
-        # 文字情報を直接取得
-        chars = page.chars
+        import fitz  # PyMuPDF
         
-        # 文字情報を位置情報でソート
-        sorted_chars = sorted(chars, key=lambda x: (x['top'], x['x0']))
+        # PyMuPDFでテキスト抽出を試みる
+        doc = fitz.open(page._pdf.stream)
+        page_obj = doc[page.page_number]
         
-        # 行ごとにグループ化（y座標が近いものをグループ化）
-        y_tolerance = 3
-        lines = []
-        current_line = []
-        current_y = None
+        # テキストブロックを抽出
+        blocks = page_obj.get_text("blocks")
+        processed_blocks = []
         
-        for char in sorted_chars:
-            if current_y is None:
-                current_y = char['top']
-                current_line.append(char)
-            elif abs(char['top'] - current_y) <= y_tolerance:
-                current_line.append(char)
-            else:
-                if current_line:
-                    lines.append(sorted(current_line, key=lambda x: x['x0']))
-                current_line = [char]
-                current_y = char['top']
-        
-        if current_line:
-            lines.append(sorted(current_line, key=lambda x: x['x0']))
-        
-        # 各行の文字を結合
-        processed_lines = []
-        for line in lines:
-            # 数値とテキストを区別して処理
-            text_parts = []
-            current_text = ''
-            current_x = None
+        for block in blocks:
+            text = block[4]
+            # CIDフォントの処理
+            text = re.sub(r'\(cid:\d+\)', '', text)
             
-            for char in line:
-                if current_x is None:
-                    current_text = char['text']
-                    current_x = char['x0']
-                elif abs(char['x0'] - (current_x + char['width'])) <= 3:
-                    current_text += char['text']
+            if text.strip():
+                # 数値の処理
+                numbers = re.findall(r'[\d,]+', text)
+                for num in numbers:
+                    try:
+                        value = int(num.replace(',', ''))
+                        text = text.replace(num, f'{value:,}')
+                    except ValueError:
+                        continue
+                
+                processed_blocks.append({
+                    'text': text.strip(),
+                    'bbox': block[:4],
+                    'block_type': block[6]
+                })
+        
+        # テンプレート認識（様式番号に基づく）
+        form_patterns = {
+            '所得税': r'所得税及び復興特別所得税の申告書',
+            '法人税': r'法人税申告書',
+            '消費税': r'消費税及び地方消費税の申告書',
+            '源泉所得税': r'源泉所得税の申告書'
+        }
+        
+        form_type = None
+        for key, pattern in form_patterns.items():
+            if any(re.search(pattern, block['text']) for block in processed_blocks):
+                form_type = key
+                break
+        
+        # フォームタイプに応じた処理
+        if form_type:
+            st.info(f"📄 {form_type}の申告書として処理します")
+            
+            # 表形式データの抽出
+            tables = []
+            current_table = []
+            current_y = None
+            y_tolerance = 5
+            
+            for block in processed_blocks:
+                if current_y is None:
+                    current_y = block['bbox'][1]
+                    current_table.append(block)
+                elif abs(block['bbox'][1] - current_y) <= y_tolerance:
+                    current_table.append(block)
                 else:
-                    if current_text:
-                        text_parts.append(current_text)
-                    current_text = char['text']
-                current_x = char['x0']
+                    if current_table:
+                        tables.append(sorted(current_table, key=lambda x: x['bbox'][0]))
+                    current_table = [block]
+                    current_y = block['bbox'][1]
             
-            if current_text:
-                text_parts.append(current_text)
+            if current_table:
+                tables.append(sorted(current_table, key=lambda x: x['bbox'][0]))
             
-            # 数値の場合は桁区切りを追加
-            processed_text = ''
-            for part in text_parts:
-                if part.isdigit():
-                    processed_text += f'{int(part):,}'
-                else:
-                    processed_text += part
-                processed_text += ' '
+            return tables
             
-            if processed_text.strip():
-                processed_lines.append(processed_text.strip())
-        
-        return processed_lines
+        else:
+            st.warning("⚠️ 申告書の種類を特定できませんでした。一般的なPDFとして処理します。")
+            return processed_blocks
+            
     except Exception as e:
         st.error(f"確定申告書の処理中にエラーが発生しました: {str(e)}")
         return []
@@ -520,42 +533,54 @@ def create_tax_return_excel(lines, output_path):
         return False
 
 def process_pdf(uploaded_file):
-    """PDFファイルを処理する"""
+    """PDFファイルの処理"""
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            pdf_path = tmp_file.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
+            temp_pdf.write(uploaded_file.getvalue())
+            pdf_path = temp_pdf.name
+        
+        with pdfplumber.open(pdf_path) as pdf:
+            # ページ数の確認と制限
+            total_pages = len(pdf.pages)
+            if total_pages > 1 and not st.session_state.user_state['is_premium']:
+                st.warning(f"📄 無料プランでは1ページ目のみ処理されます（全{total_pages}ページ中）")
+                process_pages = 1
+            else:
+                process_pages = min(total_pages, 3) if st.session_state.user_state['is_premium'] else 1
             
-            # 確定申告書かどうかを判定
-            is_tax_return = is_tax_return_pdf(pdf_path)
-            
-            with pdfplumber.open(pdf_path) as pdf:
-                page = pdf.pages[0]
+            # 処理するページの表示
+            with st.spinner(f'PDFを解析中... ({process_pages}/{total_pages} ページ)'):
+                # 以降の処理を続ける
+                # 確定申告書かどうかを判定
+                is_tax_return = is_tax_return_pdf(pdf_path)
                 
-                if is_tax_return:
-                    # 確定申告書用の処理
-                    lines = process_tax_return_pdf(page)
+                with pdfplumber.open(pdf_path) as pdf:
+                    page = pdf.pages[0]
                     
-                    if lines:
-                        tax_return_path = pdf_path.replace('.pdf', '_tax_return.xlsx')
-                        if create_tax_return_excel(lines, tax_return_path):
-                            return tax_return_path, None
-                else:
-                    # 通常のPDF処理
-                    normal_path = pdf_path.replace('.pdf', '_normal.xlsx')
-                    layout_path = pdf_path.replace('.pdf', '_layout.xlsx')
-                    
-                    document_structure = analyze_document_structure(pdf_path)
-                    layout_info = extract_exact_layout(pdf_path)
-                    
-                    if document_structure:
-                        create_excel_output(document_structure['items'], normal_path)
-                    if layout_info:
-                        create_layout_excel(layout_info, layout_path)
-                    
-                    return normal_path, layout_path
-            
-            return None, None
+                    if is_tax_return:
+                        # 確定申告書用の処理
+                        lines = process_tax_return_pdf(page)
+                        
+                        if lines:
+                            tax_return_path = pdf_path.replace('.pdf', '_tax_return.xlsx')
+                            if create_tax_return_excel(lines, tax_return_path):
+                                return tax_return_path, None
+                    else:
+                        # 通常のPDF処理
+                        normal_path = pdf_path.replace('.pdf', '_normal.xlsx')
+                        layout_path = pdf_path.replace('.pdf', '_layout.xlsx')
+                        
+                        document_structure = analyze_document_structure(pdf_path)
+                        layout_info = extract_exact_layout(pdf_path)
+                        
+                        if document_structure:
+                            create_excel_output(document_structure['items'], normal_path)
+                        if layout_info:
+                            create_layout_excel(layout_info, layout_path)
+                        
+                        return normal_path, layout_path
+                
+                return None, None
             
     except Exception as e:
         st.error(f"ファイル処理中にエラーが発生しました: {str(e)}")
@@ -799,6 +824,54 @@ def process_and_show_results(uploaded_file):
     except Exception as e:
         st.error(f"処理中にエラーが発生しました: {str(e)}")
 
+def show_conversion_limit_status():
+    """変換回数の状態を表示するコンポーネント"""
+    # スタイルの定義
+    st.markdown("""
+    <style>
+    .conversion-status {
+        padding: 10px;
+        border-radius: 5px;
+        margin: 10px 0;
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+    }
+    .premium-status {
+        background-color: #fff3cd;
+        border-color: #ffeeba;
+    }
+    .warning-status {
+        background-color: #f8d7da;
+        border-color: #f5c6cb;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # ステータスの表示
+    if st.session_state.user_state['is_premium']:
+        st.markdown("""
+        <div class="conversion-status premium-status">
+            🌟 プレミアムユーザー：無制限でご利用いただけます
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        current_date = datetime.now().date()
+        if st.session_state.user_state['last_conversion_date'] != current_date:
+            st.session_state.user_state['daily_conversions'] = 0
+            st.session_state.user_state['last_conversion_date'] = current_date
+        
+        max_conversions = 5 if st.session_state.user_state['is_logged_in'] else 3
+        remaining = max_conversions - st.session_state.user_state['daily_conversions']
+        
+        status_class = "warning-status" if remaining <= 1 else ""
+        status_text = f"本日の残り変換回数：{remaining} / {max_conversions}回"
+        
+        st.markdown(f"""
+        <div class="conversion-status {status_class}">
+            📊 {status_text}
+        </div>
+        """, unsafe_allow_html=True)
+
 def create_conversion_section():
     """変換セクションの作成"""
     col1, col2 = st.columns([1, 1])
@@ -806,33 +879,20 @@ def create_conversion_section():
     with col1:
         st.markdown("### ファイルをアップロード")
         
-        # 利用制限の表示と更新（セッション初期化の修正）
-        if 'last_conversion_date' not in st.session_state.user_state:
-            st.session_state.user_state['last_conversion_date'] = datetime.now().date()
-            st.session_state.user_state['daily_conversions'] = 0
+        # 変換回数の表示
+        show_conversion_limit_status()
         
-        current_date = datetime.now().date()
-        if st.session_state.user_state['last_conversion_date'] != current_date:
-            st.session_state.user_state['daily_conversions'] = 0
-            st.session_state.user_state['last_conversion_date'] = current_date
-        
-        # ファイルアップロードの権限チェックを修正
+        # ファイルアップロード
         uploaded_file = st.file_uploader(
             "クリックまたはドラッグ＆ドロップでPDFファイルを選択",
             type=['pdf'],
             accept_multiple_files=st.session_state.user_state.get('is_premium', False),
-            key="pdf_uploader"  # キーを固定して状態を保持
+            key="pdf_uploader"
         )
         
-        # プラン説明
-        st.markdown("""
-        #### 利用可能回数
-        - 無料（未登録）：1日3ファイルまで
-        - 無料（登録済）：1日5ファイルまで
-        - 有料プラン（月額500円）：無制限＋保存機能付き
-        
-        [無料プランと有料プランの違いを見る](javascript:void(0))
-        """)
+        # 複数ページの制限に関する説明
+        if not st.session_state.user_state['is_premium']:
+            st.info("📄 無料プランでは1ページ目のみ変換されます。全ページ変換は有料プランでご利用いただけます。")
         
         if uploaded_file:
             if st.button("Excelに変換する", disabled=not check_conversion_limit()):
@@ -885,16 +945,45 @@ def show_ads():
 def show_footer():
     """フッターの表示"""
     st.markdown("---")
-    col1, col2, col3, col4 = st.columns(4)
     
-    with col1:
-        st.markdown("[よくある質問（FAQ）](javascript:void(0))")
-    with col2:
-        st.markdown("[サポート対象PDF一覧](javascript:void(0))")
-    with col3:
-        st.markdown("[セキュリティポリシー](javascript:void(0))")
-    with col4:
-        st.markdown("[利用規約](javascript:void(0))")
+    # モバイル対応のためのカスタムCSS
+    st.markdown("""
+    <style>
+    .footer-container {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-around;
+        padding: 1rem;
+        gap: 1rem;
+    }
+    .footer-link {
+        flex: 1 1 200px;
+        text-align: center;
+        padding: 0.5rem;
+        background-color: #f8f9fa;
+        border-radius: 5px;
+        transition: background-color 0.3s;
+    }
+    .footer-link:hover {
+        background-color: #e9ecef;
+    }
+    @media (max-width: 768px) {
+        .footer-link {
+            flex: 1 1 100%;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # フッターリンク
+    st.markdown("""
+    <div class="footer-container">
+        <a href="?page=faq" class="footer-link">よくある質問（FAQ）</a>
+        <a href="?page=supported_pdf" class="footer-link">サポート対象PDF一覧</a>
+        <a href="?page=security_policy" class="footer-link">セキュリティポリシー</a>
+        <a href="?page=terms" class="footer-link">利用規約</a>
+    </div>
+    """, unsafe_allow_html=True)
 
 def create_invoice_summary(layout_info):
     """請求書の項目別サマリーを作成"""
@@ -951,10 +1040,22 @@ def create_invoice_summary(layout_info):
         return None
 
 def main():
-    create_hero_section()
-    show_auth_ui()
-    create_conversion_section()
-    show_ads()
+    # クエリパラメータからページを取得
+    query_params = st.experimental_get_query_params()
+    current_page = query_params.get("page", ["home"])[0]
+    
+    # ページに応じてコンテンツを表示
+    if current_page == "security_policy":
+        create_security_policy_page()
+    elif current_page == "terms":
+        create_terms_page()
+    else:
+        create_hero_section()
+        show_auth_ui()
+        create_conversion_section()
+        show_ads()
+    
+    # フッターは常に表示
     show_footer()
 
 if __name__ == "__main__":
