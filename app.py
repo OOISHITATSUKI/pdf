@@ -10,7 +10,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 
 # Stripe関連のコードは一時的にコメントアウト
@@ -193,100 +193,55 @@ def main():
     st.title("PDF to Excel 変換ツール")
     st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。")
     
-    # ファイルアップロード
-    uploaded_files = st.file_uploader(
-        "PDFファイルを選択（最大3つまで）",
-        type=['pdf'],
-        accept_multiple_files=True
-    )
-
-    if uploaded_files:
-        max_files = 10 if st.session_state.user_state['is_premium'] else 3
-        
-        if len(uploaded_files) > max_files:
-            st.error(f"⚠️ 一度に変換できるのは最大{max_files}ファイルまでです")
-        else:
-            for file in uploaded_files:
-                st.write(f"処理中: {file.name}")
-                with st.spinner('変換中...'):
-                    try:
-                        # 一時ファイルの作成
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                            tmp_file.write(file.getvalue())
-                            tmp_path = tmp_file.name
-
-                        # PDFの処理
-                        tables = []
-                        with pdfplumber.open(tmp_path) as pdf:
-                            for page in pdf.pages:
-                                try:
-                                    table = page.extract_table()
-                                    if table:
-                                        tables.extend(table)
-                                    else:
-                                        # テーブルが見つからない場合はテキストとして抽出
-                                        text = page.extract_text()
-                                        if text:
-                                            tables.append([text])
-                                except Exception as e:
-                                    st.warning(f"ページの処理中にエラーが発生しました: {str(e)}")
-                                    continue
-
-                        # 一時ファイルの削除
-                        os.unlink(tmp_path)
-
-                        if tables:
-                            # データフレームの作成と最適化
-                            df = pd.DataFrame(tables)
-                            df = df.dropna(how='all').dropna(axis=1, how='all')
-
-                            st.success(f"{file.name} の変換が完了しました！")
-                            
-                            # プレビューの表示
-                            st.write("プレビュー:")
-                            st.dataframe(df)
-                            
-                            # Excelファイルの作成とダウンロード
-                            excel_file = f'converted_{file.name}.xlsx'
-                            df.to_excel(excel_file, index=False)
-                            
-                            with open(excel_file, 'rb') as f:
-                                st.download_button(
-                                    label=f"📥 {file.name} をダウンロード",
-                                    data=f,
-                                    file_name=excel_file,
-                                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                                )
-                            
-                            # 一時ファイルの削除
-                            try:
-                                os.remove(excel_file)
-                            except:
-                                pass
-                            
-                            if not st.session_state.user_state['is_premium']:
-                                st.session_state.user_state['daily_conversions'] += 1
-                        else:
-                            st.warning("PDFからデータを抽出できませんでした")
-                    
-                    except Exception as e:
-                        st.error(f"ファイルの処理中にエラーが発生しました: {str(e)}")
-                        continue
-
-    # プレミアム機能の説明
+    # 利用制限の表示
     if not st.session_state.user_state['is_premium']:
-        st.markdown("""
-        ---
-        ### 🌟 プレミアム機能 (月額500円)
-        - ✨ 無制限の変換回数
-        - 📦 一度に10ファイルまで変換可能
-        - 📧 変換したファイルをメールで受信
-        - 💾 30日間のファイル保存
-        - 🚫 広告非表示
-        """)
-
-if __name__ == "__main__":
-    main()
+        if st.session_state.user_state['is_logged_in']:
+            st.info(f"本日の残り変換回数: {5 - st.session_state.user_state['daily_conversions']}回")
+        else:
+            st.info(f"本日の残り変換回数: {3 - st.session_state.user_state['daily_conversions']}回")
+    
+    # ファイルアップロード
+    uploaded_file = st.file_uploader("PDFファイルを選択", type=['pdf'])
+    
+    if uploaded_file:
+        if not check_conversion_limit():
+            if st.session_state.user_state['is_logged_in']:
+                st.error("本日の変換可能回数（5回）を超えました。プレミアムプランへのアップグレードをご検討ください。")
+            else:
+                st.error("本日の変換可能回数（3回）を超えました。アカウント登録で追加の2回が利用可能になります。")
+            return
+        
+        with st.spinner('変換中...'):
+            # 一時ファイルの作成
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
+                tmp_pdf.write(uploaded_file.getvalue())
+                pdf_path = tmp_pdf.name
+            
+            excel_path = f'converted_{uploaded_file.name}.xlsx'
+            
+            # 変換実行
+            if convert_pdf_to_excel(pdf_path, excel_path):
+                st.success("変換が完了しました！")
+                
+                # ダウンロードボタン
+                with open(excel_path, 'rb') as f:
+                    st.download_button(
+                        label="📥 Excelファイルをダウンロード",
+                        data=f,
+                        file_name=excel_path,
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
+                
+                # 変換回数をカウントアップ
+                if not st.session_state.user_state['is_premium']:
+                    st.session_state.user_state['daily_conversions'] += 1
+            
+            # 一時ファイルの削除
+            try:
+                os.remove(pdf_path)
+                os.remove(excel_path)
+            except:
+                pass
 
 # メイン処理部分
 def process_files(uploaded_files):
@@ -933,6 +888,77 @@ def process_pdf_file(uploaded_file):
             
     except Exception as e:
         st.error(f"処理中にエラーが発生しました: {str(e)}")
+
+def convert_pdf_to_excel(pdf_path, excel_path):
+    """PDFをExcelに変換"""
+    try:
+        wb = Workbook()
+        ws = wb.active
+        
+        with pdfplumber.open(pdf_path) as pdf:
+            current_row = 1
+            
+            for page in pdf.pages:
+                # テーブルの抽出
+                tables = page.extract_tables()
+                
+                for table in tables:
+                    # 各行の処理
+                    for row_idx, row in enumerate(table):
+                        # セルの結合状態を確認
+                        merged_cells = []
+                        current_merge = None
+                        
+                        for col_idx, cell in enumerate(row):
+                            # セルの書き込み
+                            if cell is not None:
+                                cell = str(cell).strip()
+                                ws.cell(row=current_row + row_idx, 
+                                      column=col_idx + 1, 
+                                      value=cell)
+                                
+                                # セルのスタイル設定
+                                cell_obj = ws.cell(row=current_row + row_idx, 
+                                                 column=col_idx + 1)
+                                
+                                # 基本的なスタイル
+                                cell_obj.font = Font(name='Yu Gothic', size=10)
+                                cell_obj.border = Border(
+                                    left=Side(style='thin'),
+                                    right=Side(style='thin'),
+                                    top=Side(style='thin'),
+                                    bottom=Side(style='thin')
+                                )
+                                
+                                # ヘッダー行のスタイル
+                                if row_idx == 0:
+                                    cell_obj.font = Font(name='Yu Gothic', 
+                                                       size=10, 
+                                                       bold=True)
+                                    cell_obj.fill = PatternFill(
+                                        start_color='F2F2F2',
+                                        end_color='F2F2F2',
+                                        fill_type='solid'
+                                    )
+                                
+                                # 数値の右寄せ
+                                if cell.replace(',', '').replace('.', '').isdigit():
+                                    cell_obj.alignment = Alignment(horizontal='right')
+                                else:
+                                    cell_obj.alignment = Alignment(horizontal='left')
+                            
+                            # 列幅の自動調整
+                            ws.column_dimensions[get_column_letter(col_idx + 1)].width = 15
+                    
+                    current_row += len(table) + 1  # テーブル間に1行空ける
+        
+        # Excelファイルの保存
+        wb.save(excel_path)
+        return True
+        
+    except Exception as e:
+        st.error(f"変換中にエラーが発生しました: {str(e)}")
+        return False
 
 # requirements.txtに追加が必要なパッケージ
 """
