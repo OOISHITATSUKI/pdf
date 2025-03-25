@@ -1113,6 +1113,157 @@ def create_terms_page():
     本規約は日本法に準拠し、東京地方裁判所を第一審の専属的合意管轄裁判所とします。
     """)
 
+def install_tesseract_dependencies():
+    """Tesseractの依存関係をインストール"""
+    try:
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        st.error("""
+        必要なライブラリがインストールされていません。
+        以下のコマンドを実行してください：
+        
+        ```bash
+        pip install pytesseract Pillow
+        ```
+        
+        また、Tesseractのインストールも必要です：
+        
+        macOS:
+        ```bash
+        brew install tesseract
+        ```
+        
+        Ubuntu:
+        ```bash
+        sudo apt-get install tesseract-ocr
+        sudo apt-get install tesseract-ocr-jpn
+        ```
+        """)
+        return False
+    return True
+
+def perform_ocr(image_path):
+    """OCR処理を実行"""
+    try:
+        import pytesseract
+        from PIL import Image
+        
+        # 日本語OCRの設定
+        custom_config = r'--oem 3 --psm 6 -l jpn'
+        
+        # 画像の前処理
+        image = Image.open(image_path)
+        # グレースケール変換
+        image = image.convert('L')
+        # コントラスト強調
+        from PIL import ImageEnhance
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(2)
+        
+        # OCR実行
+        text = pytesseract.image_to_string(image, config=custom_config)
+        
+        # 表構造の検出
+        data = pytesseract.image_to_data(image, config=custom_config, output_type=pytesseract.Output.DICT)
+        
+        # 検出された要素を構造化
+        elements = []
+        for i in range(len(data['text'])):
+            if data['text'][i].strip():
+                element = {
+                    'text': data['text'][i],
+                    'conf': data['conf'][i],
+                    'x': data['left'][i],
+                    'y': data['top'][i],
+                    'width': data['width'][i],
+                    'height': data['height'][i]
+                }
+                elements.append(element)
+        
+        return text, elements
+    except Exception as e:
+        st.error(f"OCR処理中にエラーが発生しました: {str(e)}")
+        return None, None
+
+def detect_document_type(text, elements):
+    """ドキュメントの種類を判定"""
+    # 確定申告書の判定
+    tax_return_keywords = ['確定申告書', '所得税', '法人税', '消費税', '源泉所得税']
+    if any(keyword in text for keyword in tax_return_keywords):
+        return 'tax_return'
+    
+    # Misoca請求書の判定
+    misoca_keywords = ['Misoca', 'ミソカ', '請求書番号']
+    if any(keyword in text for keyword in misoca_keywords):
+        return 'misoca'
+    
+    # 一般的な請求書の判定
+    invoice_keywords = ['請求書', '御中', '納品書', '見積書']
+    if any(keyword in text for keyword in invoice_keywords):
+        return 'invoice'
+    
+    return 'unknown'
+
+def process_pdf_with_ocr(uploaded_file):
+    """PDFをOCRで処理"""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
+            temp_pdf.write(uploaded_file.getvalue())
+            pdf_path = temp_pdf.name
+        
+        # PDFを画像に変換
+        images = []
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages[:1]:  # 無料プランは1ページのみ
+                img = page.to_image()
+                img_path = f"{pdf_path}_page.png"
+                img.save(img_path)
+                images.append(img_path)
+        
+        results = []
+        for img_path in images:
+            # OCR処理
+            text, elements = perform_ocr(img_path)
+            if text and elements:
+                # ドキュメントタイプの判定
+                doc_type = detect_document_type(text, elements)
+                
+                # タイプに応じた処理
+                if doc_type == 'tax_return':
+                    result = process_tax_return_ocr(elements)
+                elif doc_type == 'misoca':
+                    result = process_misoca_ocr(elements)
+                else:
+                    result = process_general_invoice_ocr(elements)
+                
+                results.append({
+                    'type': doc_type,
+                    'text': text,
+                    'elements': elements,
+                    'processed': result
+                })
+            
+            # 一時ファイルの削除
+            os.unlink(img_path)
+        
+        # 結果をExcelに出力
+        if results:
+            excel_path = create_ocr_excel(results, pdf_path)
+            return excel_path
+        
+        return None
+        
+    except Exception as e:
+        st.error(f"OCR処理中にエラーが発生しました: {str(e)}")
+        return None
+    finally:
+        if 'pdf_path' in locals():
+            try:
+                os.unlink(pdf_path)
+            except:
+                pass
+
 def main():
     """メイン関数の修正"""
     # クエリパラメータからページを取得（experimental_get_query_paramsの置き換え）
