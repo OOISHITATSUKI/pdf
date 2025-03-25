@@ -542,28 +542,28 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
             temp_pdf.write(uploaded_file.getvalue())
             pdf_path = temp_pdf.name
-        
+
         with pdfplumber.open(pdf_path) as pdf:
             # 1ページ目のみ処理（無料プラン）
-                    page = pdf.pages[0]
-                    
+            page = pdf.pages[0]
+            
             # テーブルの抽出
             tables = page.extract_tables()
             if not tables:
                 raise ValueError("テーブルが見つかりませんでした")
 
             # Excelファイルの作成
-        wb = Workbook()
-                ws = wb.active
+            wb = Workbook()
+            ws = wb.active
             
             # スタイルの定義
             header_font = Font(bold=True)
             border = Border(
-                            left=Side(style='thin'),
-                            right=Side(style='thin'),
-                            top=Side(style='thin'),
-                            bottom=Side(style='thin')
-                        )
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
             
             # テーブルデータの書き込み
             for i, row in enumerate(tables[0], 1):
