@@ -139,7 +139,7 @@ def show_auth_ui():
                         st.session_state.user_state['email'] = login_email
                         st.session_state.user_state['is_premium'] = st.session_state.users[login_email]['is_premium']
                         st.success(message)
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error(message)
         
@@ -159,7 +159,7 @@ def show_auth_ui():
                             st.success(message)
                             st.session_state.user_state['is_logged_in'] = True
                             st.session_state.user_state['email'] = reg_email
-                            st.experimental_rerun()
+                            st.rerun()
                         else:
                             st.error(message)
     
@@ -179,7 +179,7 @@ def show_auth_ui():
                 'email': None,
                 'conversion_count': 0
             }
-            st.experimental_rerun()
+            st.rerun()
 
 # メインアプリケーションのUI
 def main():
@@ -203,7 +203,33 @@ def main():
         else:
             for uploaded_file in uploaded_files:
                 st.write(f"処理中: {uploaded_file.name}")
-                # 既存の変換処理...
+                with st.spinner('変換中...'):
+                    df = process_pdf(uploaded_file)
+                    
+                    if df is not None:
+                        st.success(f"{uploaded_file.name} の変換が完了しました！")
+                        
+                        # プレビューの表示
+                        st.write("プレビュー:")
+                        st.dataframe(df)
+                        
+                        # Excelファイルの作成とダウンロード
+                        excel_file = f'converted_{uploaded_file.name}.xlsx'
+                        df.to_excel(excel_file, index=False)
+                        
+                        with open(excel_file, 'rb') as f:
+                            st.download_button(
+                                label=f"📥 {uploaded_file.name} をダウンロード",
+                                data=f,
+                                file_name=excel_file,
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
+                        
+                        # 一時ファイルの削除
+                        os.remove(excel_file)
+                        
+                        if not st.session_state.user_state['is_premium']:
+                            st.session_state.user_state['conversion_count'] += 1
 
 if __name__ == "__main__":
     main()
