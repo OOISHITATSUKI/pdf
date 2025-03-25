@@ -2,8 +2,6 @@ import streamlit as st
 import pdfplumber
 import pandas as pd
 import numpy as np
-import cv2
-import pytesseract
 from PIL import Image
 import tempfile
 import os
@@ -136,17 +134,11 @@ def analyze_document_structure(pdf_path):
         with pdfplumber.open(pdf_path) as pdf:
             page = pdf.pages[0]
             
-            # 罫線の検出
-            edges = page.edges
-            horizontals = [e for e in edges if e['orientation'] == 'horizontal']
-            verticals = [e for e in edges if e['orientation'] == 'vertical']
-            
             # テキストの抽出と位置情報の取得
             texts = page.extract_words(
                 keep_blank_chars=True,
                 x_tolerance=3,
-                y_tolerance=3,
-                extra_attrs=['size', 'font']
+                y_tolerance=3
             )
             
             # 勘定科目のパターンを定義
@@ -173,10 +165,13 @@ def analyze_document_structure(pdf_path):
                             'y1': text['bottom']
                         })
             
+            # 表の検出
+            tables = page.extract_tables()
+            
             return {
-                'edges': {'horizontal': horizontals, 'vertical': verticals},
                 'texts': texts,
-                'classified_items': classified_items
+                'classified_items': classified_items,
+                'tables': tables
             }
     except Exception as e:
         st.error(f"帳票構造の解析中にエラーが発生しました: {str(e)}")
@@ -186,13 +181,21 @@ def extract_numerical_values(text):
     """数値を抽出して整形する"""
     # カンマを除去して数値に変換
     numbers = re.findall(r'[\d,]+', text)
-    return [int(num.replace(',', '')) for num in numbers if num]
+    cleaned_numbers = []
+    for num in numbers:
+        try:
+            cleaned_numbers.append(int(num.replace(',', '')))
+        except ValueError:
+            continue
+    return cleaned_numbers
 
 def create_excel_output(document_structure, output_path):
     """抽出したデータをExcelファイルに出力"""
     try:
         # カテゴリごとのDataFrameを作成
         dfs = {}
+        
+        # 分類された項目の処理
         for category, items in document_structure['classified_items'].items():
             data = []
             for item in items:
@@ -208,33 +211,24 @@ def create_excel_output(document_structure, output_path):
                     '金額': values[0] if values else 0
                 })
             
-            dfs[category] = pd.DataFrame(data)
+            if data:
+                dfs[category] = pd.DataFrame(data)
         
-        # Excelファイルに出力（シート分け）
-        with pd.ExcelWriter(output_path, engine='openpyxdf') as writer:
+        # テーブルデータの処理
+        if document_structure['tables']:
+            table_data = []
+            for table in document_structure['tables']:
+                if table:  # テーブルが空でない場合
+                    df = pd.DataFrame(table[1:], columns=table[0] if table[0] else None)
+                    table_data.append(df)
+            
+            if table_data:
+                dfs['テーブルデータ'] = pd.concat(table_data, ignore_index=True)
+        
+        # Excelファイルに出力
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             for category, df in dfs.items():
                 df.to_excel(writer, sheet_name=category, index=False)
-                
-                # シートの書式設定
-                workbook = writer.book
-                worksheet = writer.sheets[category]
-                
-                # 列幅の自動調整
-                for column in worksheet.columns:
-                    max_length = 0
-                    column = [cell for cell in column]
-                    for cell in column:
-                        try:
-                            if len(str(cell.value)) > max_length:
-                                max_length = len(str(cell.value))
-                        except:
-                            pass
-                    adjusted_width = (max_length + 2)
-                    worksheet.column_dimensions[column[0].column_letter].width = adjusted_width
-                
-                # 金額列の書式設定
-                money_format = workbook.add_format({'num_format': '#,##0'})
-                worksheet.set_column('B:B', None, money_format)
         
         return True
     except Exception as e:
