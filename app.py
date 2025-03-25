@@ -398,18 +398,6 @@ def is_tax_return_pdf(pdf_path):
 def process_tax_return_pdf(page):
     """確定申告書専用の処理"""
     try:
-        # PyMuPDFの代わりにpdfplumberを使用
-        text = page.extract_text(
-            x_tolerance=1,
-            y_tolerance=1,
-            layout=True,
-            keep_blank_chars=False,
-            use_text_flow=True,
-            horizontal_ltr=True,
-            vertical_ttb=True,
-            extra_attrs=['fontname', 'size']
-        )
-        
         # テキストブロックを抽出
         blocks = []
         for word in page.extract_words(
@@ -431,7 +419,9 @@ def process_tax_return_pdf(page):
                     except ValueError:
                         continue
                 
+                block_id = f"{word['x0']}_{word['top']}"  # ユニークなID作成
                 blocks.append({
+                    'id': block_id,  # ユニークなIDを追加
                     'text': text.strip(),
                     'bbox': (word['x0'], word['top'], word['x1'], word['bottom']),
                     'fontname': word.get('fontname', ''),
@@ -440,15 +430,15 @@ def process_tax_return_pdf(page):
         
         # テンプレート認識（様式番号に基づく）
         form_patterns = {
-            '所得税': r'所得税及び復興特別所得税の申告書',
-            '法人税': r'法人税申告書',
-            '消費税': r'消費税及び地方消費税の申告書',
-            '源泉所得税': r'源泉所得税の申告書'
+            '所得税': '所得税及び復興特別所得税の申告書',
+            '法人税': '法人税申告書',
+            '消費税': '消費税及び地方消費税の申告書',
+            '源泉所得税': '源泉所得税の申告書'
         }
         
         form_type = None
         for key, pattern in form_patterns.items():
-            if any(re.search(pattern, block['text']) for block in blocks):
+            if any(pattern in block['text'] for block in blocks):
                 form_type = key
                 break
         
@@ -462,7 +452,10 @@ def process_tax_return_pdf(page):
             current_y = None
             y_tolerance = 5
             
-            for block in blocks:
+            # y座標でソート
+            sorted_blocks = sorted(blocks, key=lambda x: x['bbox'][1])
+            
+            for block in sorted_blocks:
                 if current_y is None:
                     current_y = block['bbox'][1]
                     current_table.append(block)
@@ -470,12 +463,15 @@ def process_tax_return_pdf(page):
                     current_table.append(block)
                 else:
                     if current_table:
-                        tables.append(sorted(current_table, key=lambda x: x['bbox'][0]))
+                        # x座標でソート
+                        sorted_table = sorted(current_table, key=lambda x: x['bbox'][0])
+                        tables.append(sorted_table)
                     current_table = [block]
                     current_y = block['bbox'][1]
             
             if current_table:
-                tables.append(sorted(current_table, key=lambda x: x['bbox'][0]))
+                sorted_table = sorted(current_table, key=lambda x: x['bbox'][0])
+                tables.append(sorted_table)
             
             return tables
             
