@@ -3,6 +3,60 @@ import pdfplumber
 import pandas as pd
 import tempfile
 import os
+import time
+from datetime import datetime, timedelta
+
+# セッション状態の初期化
+if 'user_state' not in st.session_state:
+    st.session_state.user_state = {
+        'is_logged_in': False,        # ログイン状態
+        'is_premium': False,          # 有料会員状態
+        'daily_conversions': 0,       # 今日の変換回数
+        'last_conversion_date': None  # 最後の変換日
+    }
+
+def check_conversion_limit():
+    """ユーザーの変換制限をチェックする関数"""
+    # 未ログインまたは無料会員の場合のみ制限をチェック
+    if not st.session_state.user_state['is_premium']:
+        current_date = datetime.now().date()
+        last_date = st.session_state.user_state['last_conversion_date']
+
+        # 日付が変わった場合、カウントをリセット
+        if last_date != current_date:
+            st.session_state.user_state['daily_conversions'] = 0
+            st.session_state.user_state['last_conversion_date'] = current_date
+
+        # 制限チェック
+        if st.session_state.user_state['daily_conversions'] >= 3:
+            return False
+    return True
+
+def increment_conversion_count():
+    """変換回数をカウントアップする関数"""
+    if not st.session_state.user_state['is_premium']:
+        st.session_state.user_state['daily_conversions'] += 1
+        st.session_state.user_state['last_conversion_date'] = datetime.now().date()
+
+# ログイン状態に応じたUIの表示
+def show_user_status():
+    """ユーザーステータスを表示する関数"""
+    if st.session_state.user_state['is_logged_in']:
+        if st.session_state.user_state['is_premium']:
+            st.sidebar.success("🌟 プレミアム会員")
+            st.sidebar.write("無制限で変換できます")
+        else:
+            st.sidebar.info("📝 無料会員")
+            remaining = 3 - st.session_state.user_state['daily_conversions']
+            st.sidebar.write(f"本日の残り変換可能回数: {remaining}回")
+            st.sidebar.button("🌟 プレミアム会員になる", 
+                            help="月額500円で無制限に変換できます！")
+    else:
+        st.sidebar.warning("未ログイン")
+        st.sidebar.write("1日3回まで変換できます")
+        col1, col2 = st.sidebar.columns(2)
+        col1.button("ログイン")
+        col2.button("新規登録")
 
 # ページ設定
 st.set_page_config(
@@ -136,6 +190,9 @@ st.markdown("""
 # メインレイアウト
 st.markdown('<h1>PDF to Excel 変換ツール</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。</p>', unsafe_allow_html=True)
+
+# ユーザーステータスの表示
+show_user_status()
 
 # ファイルアップロード
 st.markdown('<div class="upload-area">', unsafe_allow_html=True)
