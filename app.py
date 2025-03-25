@@ -13,7 +13,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, String, DateTime, Enum, JSON, ForeignKey, Text
 from sqlalchemy.sql import func
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 import io
 import json
 import sqlite3
@@ -296,8 +296,10 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
             # 1ページ目のみ処理（無料プラン）
             page = pdf.pages[0]
             
-            # テーブルの抽出
+            # テーブルとテキストの抽出
             tables = page.extract_tables()
+            texts = page.extract_text().split('\n')
+            
             if not tables:
                 raise ValueError("テーブルが見つかりませんでした")
 
@@ -305,27 +307,88 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
             wb = Workbook()
             ws = wb.active
             
+            # シート名の設定
+            sheet_name = f"{get_document_type_label(document_type)}_{document_date.strftime('%Y-%m-%d') if document_date else 'unknown_date'}"
+            ws.title = sheet_name
+            
             # スタイルの定義
-            header_font = Font(bold=True)
-            border = Border(
+            header_font = Font(bold=True, size=12)
+            normal_font = Font(size=11)
+            header_fill = PatternFill(start_color="E3F2FD", end_color="E3F2FD", fill_type="solid")
+            thin_border = Border(
                 left=Side(style='thin'),
                 right=Side(style='thin'),
                 top=Side(style='thin'),
                 bottom=Side(style='thin')
             )
+            thick_border = Border(
+                left=Side(style='medium'),
+                right=Side(style='medium'),
+                top=Side(style='medium'),
+                bottom=Side(style='medium')
+            )
+            
+            # ドキュメント情報の挿入
+            ws.merge_cells('A1:E1')
+            doc_info = ws['A1']
+            doc_info.value = f"※このファイルは{get_document_type_label(document_type)}です（発行日：{document_date.strftime('%Y年%m月%d日') if document_date else '日付不明'}）"
+            doc_info.font = Font(size=12, color="666666")
+            doc_info.alignment = Alignment(horizontal='left')
+            
+            # ヘッダー情報の抽出と挿入（宛名、発行者情報など）
+            current_row = 3
+            for text in texts[:5]:  # 最初の数行を確認
+                if any(keyword in text for keyword in ['株式会社', '御中', '様']):
+                    ws.merge_cells(f'A{current_row}:E{current_row}')
+                    cell = ws[f'A{current_row}']
+                    cell.value = text
+                    cell.font = Font(size=12, bold=True)
+                    cell.alignment = Alignment(horizontal='left')
+                    current_row += 1
+            
+            # テーブルデータの書き込み開始行
+            start_row = current_row + 1
+            
+            # テーブルヘッダーの書き込み
+            for j, cell in enumerate(tables[0][0], 1):
+                if cell is not None:
+                    ws_cell = ws.cell(row=start_row, column=j, value=str(cell).strip())
+                    ws_cell.font = header_font
+                    ws_cell.fill = header_fill
+                    ws_cell.border = thick_border
+                    ws_cell.alignment = Alignment(horizontal='center', vertical='center')
             
             # テーブルデータの書き込み
-            for i, row in enumerate(tables[0], 1):
+            for i, row in enumerate(tables[0][1:], start_row + 1):
                 for j, cell in enumerate(row, 1):
                     if cell is not None:
                         cell_value = str(cell).strip()
                         ws_cell = ws.cell(row=i, column=j, value=cell_value)
-                        ws_cell.border = border
-                        if i == 1:
-                            ws_cell.font = header_font
+                        ws_cell.font = normal_font
+                        ws_cell.border = thin_border
+                        # 数値の場合は右寄せ
                         if cell_value.replace(',', '').replace('.', '').isdigit():
                             ws_cell.alignment = Alignment(horizontal='right')
-
+                            ws_cell.number_format = '#,##0'
+            
+            # 合計金額部分の処理
+            total_row = len(tables[0]) + start_row + 1
+            for text in texts:
+                if any(keyword in text for keyword in ['合計', '総額', '税込', '消費税']):
+                    ws.merge_cells(f'A{total_row}:C{total_row}')
+                    label_cell = ws[f'A{total_row}']
+                    value_cell = ws[f'D{total_row}']
+                    
+                    label_cell.value = text.split(':')[0] if ':' in text else text
+                    value_cell.value = text.split(':')[1] if ':' in text else ''
+                    
+                    label_cell.font = Font(bold=True, size=12)
+                    value_cell.font = Font(bold=True, size=12)
+                    value_cell.alignment = Alignment(horizontal='right')
+                    value_cell.number_format = '#,##0'
+                    
+                    total_row += 1
+            
             # 列幅の自動調整
             for column in ws.columns:
                 max_length = 0
@@ -336,7 +399,7 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
                             max_length = len(str(cell.value))
                     except:
                         pass
-                adjusted_width = (max_length + 2)
+                adjusted_width = (max_length + 2) * 1.2
                 ws.column_dimensions[column_letter].width = adjusted_width
 
             # 一時ファイルとして保存
@@ -354,21 +417,53 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
     except Exception as e:
         raise Exception(f"PDFの処理中にエラーが発生しました: {str(e)}")
 
-def create_preview(uploaded_file):
-    """PDFのプレビューを生成する関数"""
+def get_document_type_label(doc_type):
+    """ドキュメントタイプのコードから表示用ラベルを取得"""
+    type_map = {
+        "estimate": "見積書",
+        "invoice": "請求書",
+        "delivery": "納品書",
+        "receipt": "領収書",
+        "financial": "決算書",
+        "tax_return": "確定申告書",
+        "other": "その他"
+    }
+    return type_map.get(doc_type, "不明な書類")
+
+def get_conversion_limit(user_id=None):
+    """ユーザーの変換制限を取得"""
+    if user_id is None:
+        return 3  # 未ログインユーザー
+    
+    # ユーザープランの取得（DBから）
+    user_plan = get_user_plan(user_id)
+    if user_plan == "premium":
+        return float('inf')  # 無制限
+    elif user_plan == "free":
+        return 5  # ログイン済み無料プラン
+    else:
+        return 3  # デフォルト（未ログイン扱い）
+
+def display_conversion_count():
+    """変換回数の表示"""
     try:
-        if uploaded_file is not None:
-            with pdfplumber.open(io.BytesIO(uploaded_file.getvalue())) as pdf:
-                first_page = pdf.pages[0]
-                img = first_page.to_image()
-                img_byte_arr = io.BytesIO()
-                img.save(img_byte_arr, format='PNG')
-                img_byte_arr = img_byte_arr.getvalue()
-                return img_byte_arr
-        return None
+        user_id = st.session_state.get('user_id')
+        daily_count = get_daily_conversion_count(user_id)
+        limit = get_conversion_limit(user_id)
+        
+        if limit == float('inf'):
+            st.markdown("📊 **変換回数制限**: 無制限")
+        else:
+            remaining = limit - daily_count
+            st.markdown(f"📊 **本日の残り変換回数**: {remaining} / {limit}回")
+            
+            # 警告表示
+            if remaining <= 1:
+                st.warning("⚠️ 本日の変換回数が残りわずかです。プレミアムプランへのアップグレードで無制限に変換できます。")
     except Exception as e:
-        st.error(f"プレビューの生成中にエラーが発生しました: {str(e)}")
-        return None
+        st.error(f"変換回数の取得中にエラーが発生しました: {str(e)}")
+        # エラー時はデフォルト値を表示
+        st.markdown("📊 **本日の残り変換回数**: 3 / 3回")
 
 def create_document_type_buttons():
     """ドキュメントタイプ選択ボタンを作成"""
@@ -479,16 +574,14 @@ def main():
     create_hero_section()
     create_login_section()
     
+    # 変換回数の表示（最上部）
+    display_conversion_count()
+    
     # 2カラムレイアウト
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.subheader("ファイルをアップロード")
-        
-        # 残り変換回数の表示
-        daily_count = get_daily_conversion_count(st.session_state.user_id)
-        remaining = 3 - daily_count  # 基本は3回
-        st.markdown(f"📊 本日の残り変換回数：{remaining}/3回")
         
         # ドキュメントタイプの選択（ボタン形式）
         document_type = create_document_type_buttons()
@@ -511,28 +604,33 @@ def main():
         
         if uploaded_file is not None and document_type is not None:
             if st.button("Excelに変換する"):
-                if check_conversion_limit(st.session_state.user_id):
+                if check_conversion_limit(st.session_state.get('user_id')):
                     try:
                         excel_data = process_pdf(uploaded_file, document_type, document_date)
                         # 変換履歴を保存
                         save_conversion_history(
-                            st.session_state.user_id,
+                            st.session_state.get('user_id'),
                             document_type,
                             document_date.strftime('%Y-%m-%d') if document_date else None,
                             uploaded_file.name,
                             "success"
                         )
+                        # 変換回数を更新
+                        increment_conversion_count(st.session_state.get('user_id'))
+                        # 変換回数の表示を更新
+                        display_conversion_count()
+                        
                         st.download_button(
                             label="Excelファイルをダウンロード",
                             data=excel_data,
-                            file_name="converted.xlsx",
+                            file_name=f"{get_document_type_label(document_type)}_{document_date.strftime('%Y-%m-%d') if document_date else 'unknown_date'}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                     except Exception as e:
                         st.error(f"処理中にエラーが発生しました: {str(e)}")
                         # エラー履歴を保存
                         save_conversion_history(
-                            st.session_state.user_id,
+                            st.session_state.get('user_id'),
                             document_type,
                             document_date.strftime('%Y-%m-%d') if document_date else None,
                             uploaded_file.name,
