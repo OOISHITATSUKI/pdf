@@ -201,26 +201,53 @@ def main():
         if len(uploaded_files) > max_files:
             st.error(f"⚠️ 一度に変換できるのは最大{max_files}ファイルまでです")
         else:
-            for uploaded_file in uploaded_files:
-                st.write(f"処理中: {uploaded_file.name}")
+            for file in uploaded_files:
+                st.write(f"処理中: {file.name}")
                 with st.spinner('変換中...'):
                     try:
-                        df = process_pdf(uploaded_file)
-                        
-                        if df is not None:
-                            st.success(f"{uploaded_file.name} の変換が完了しました！")
+                        # 一時ファイルの作成
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                            tmp_file.write(file.getvalue())
+                            tmp_path = tmp_file.name
+
+                        # PDFの処理
+                        tables = []
+                        with pdfplumber.open(tmp_path) as pdf:
+                            for page in pdf.pages:
+                                try:
+                                    table = page.extract_table()
+                                    if table:
+                                        tables.extend(table)
+                                    else:
+                                        # テーブルが見つからない場合はテキストとして抽出
+                                        text = page.extract_text()
+                                        if text:
+                                            tables.append([text])
+                                except Exception as e:
+                                    st.warning(f"ページの処理中にエラーが発生しました: {str(e)}")
+                                    continue
+
+                        # 一時ファイルの削除
+                        os.unlink(tmp_path)
+
+                        if tables:
+                            # データフレームの作成と最適化
+                            df = pd.DataFrame(tables)
+                            df = df.dropna(how='all').dropna(axis=1, how='all')
+
+                            st.success(f"{file.name} の変換が完了しました！")
                             
                             # プレビューの表示
                             st.write("プレビュー:")
                             st.dataframe(df)
                             
                             # Excelファイルの作成とダウンロード
-                            excel_file = f'converted_{uploaded_file.name}.xlsx'
+                            excel_file = f'converted_{file.name}.xlsx'
                             df.to_excel(excel_file, index=False)
                             
                             with open(excel_file, 'rb') as f:
                                 st.download_button(
-                                    label=f"📥 {uploaded_file.name} をダウンロード",
+                                    label=f"📥 {file.name} をダウンロード",
                                     data=f,
                                     file_name=excel_file,
                                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -234,11 +261,14 @@ def main():
                             
                             if not st.session_state.user_state['is_premium']:
                                 st.session_state.user_state['conversion_count'] += 1
+                        else:
+                            st.warning("PDFからデータを抽出できませんでした")
                     
                     except Exception as e:
                         st.error(f"ファイルの処理中にエラーが発生しました: {str(e)}")
                         continue
 
+    # プレミアム機能の説明
     if not st.session_state.user_state['is_premium']:
         st.markdown("""
         ---
