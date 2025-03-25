@@ -23,18 +23,38 @@ st.set_page_config(
 )
 
 # セッション状態の初期化
+if 'users' not in st.session_state:
+    st.session_state.users = {}  # ユーザーデータを一時的に保存
+
 if 'user_state' not in st.session_state:
     st.session_state.user_state = {
         'is_logged_in': False,
         'is_premium': False,
         'email': None,
-        'stored_files': [],
         'conversion_count': 0
     }
 
-# ユーザーデータベース（実際の実装ではデータベースを使用）
-if 'users' not in st.session_state:
-    st.session_state.users = {}
+# ユーザー登録（セッションベース）
+def register_user(email, password):
+    if email in st.session_state.users:
+        return False, "このメールアドレスは既に登録されています"
+    
+    st.session_state.users[email] = {
+        'password': password,
+        'is_premium': False,
+        'created_at': datetime.now()
+    }
+    return True, "登録が完了しました"
+
+# ログイン認証（セッションベース）
+def login_user(email, password):
+    if email not in st.session_state.users:
+        return False, "メールアドレスが見つかりません"
+    
+    if st.session_state.users[email]['password'] != password:
+        return False, "パスワードが正しくありません"
+    
+    return True, "ログインしました"
 
 # データベース初期化
 def init_db():
@@ -55,50 +75,6 @@ def init_db():
 # パスワードのハッシュ化
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
-
-# ユーザー登録
-def register_user(email, password):
-    try:
-        conn = sqlite3.connect('user_data.db')
-        c = conn.cursor()
-        
-        # メールアドレスの重複チェック
-        c.execute('SELECT * FROM users WHERE email = ?', (email,))
-        if c.fetchone() is not None:
-            conn.close()
-            return False, "このメールアドレスは既に登録されています"
-        
-        # 新規ユーザーの登録
-        hashed_password = hash_password(password)
-        c.execute('INSERT INTO users (email, password) VALUES (?, ?)',
-                 (email, hashed_password))
-        conn.commit()
-        conn.close()
-        return True, "登録が完了しました"
-    except Exception as e:
-        return False, f"登録中にエラーが発生しました: {str(e)}"
-
-# ログイン認証
-def login_user(email, password):
-    try:
-        conn = sqlite3.connect('user_data.db')
-        c = conn.cursor()
-        
-        # ユーザー検索
-        c.execute('SELECT * FROM users WHERE email = ? AND password = ?',
-                 (email, hash_password(password)))
-        user = c.fetchone()
-        conn.close()
-        
-        if user is not None:
-            return True, "ログインしました"
-        else:
-            return False, "メールアドレスまたはパスワードが正しくありません"
-    except Exception as e:
-        return False, f"ログイン中にエラーが発生しました: {str(e)}"
-
-# データベースの初期化
-init_db()
 
 def create_checkout_session(email):
     """Stripe決済セッションの作成"""
@@ -161,6 +137,7 @@ def show_auth_ui():
                     if success:
                         st.session_state.user_state['is_logged_in'] = True
                         st.session_state.user_state['email'] = login_email
+                        st.session_state.user_state['is_premium'] = st.session_state.users[login_email]['is_premium']
                         st.success(message)
                         st.experimental_rerun()
                     else:
@@ -180,7 +157,6 @@ def show_auth_ui():
                         success, message = register_user(reg_email, reg_password)
                         if success:
                             st.success(message)
-                            # 自動ログイン
                             st.session_state.user_state['is_logged_in'] = True
                             st.session_state.user_state['email'] = reg_email
                             st.experimental_rerun()
@@ -194,20 +170,43 @@ def show_auth_ui():
         if not st.session_state.user_state['is_premium']:
             st.sidebar.markdown("### 🌟 プレミアムにアップグレード")
             if st.sidebar.button("プレミアム会員に登録"):
-                # Stripe決済ページへのリンク
-                checkout_url = create_checkout_session(st.session_state.user_state['email'])
-                if checkout_url:
-                    st.markdown(f"[決済ページへ進む]({checkout_url})")
+                st.sidebar.info("準備中です...")
         
         if st.sidebar.button("ログアウト"):
             st.session_state.user_state = {
                 'is_logged_in': False,
                 'is_premium': False,
                 'email': None,
-                'stored_files': [],
                 'conversion_count': 0
             }
             st.experimental_rerun()
+
+# メインアプリケーションのUI
+def main():
+    show_auth_ui()
+    
+    st.title("PDF to Excel 変換ツール")
+    st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。")
+    
+    # ファイルアップロード
+    uploaded_files = st.file_uploader(
+        "PDFファイルを選択（最大3つまで）",
+        type=['pdf'],
+        accept_multiple_files=True
+    )
+
+    if uploaded_files:
+        max_files = 10 if st.session_state.user_state['is_premium'] else 3
+        
+        if len(uploaded_files) > max_files:
+            st.error(f"⚠️ 一度に変換できるのは最大{max_files}ファイルまでです")
+        else:
+            for uploaded_file in uploaded_files:
+                st.write(f"処理中: {uploaded_file.name}")
+                # 既存の変換処理...
+
+if __name__ == "__main__":
+    main()
 
 # メイン処理部分
 def process_files(uploaded_files):
@@ -290,29 +289,6 @@ def process_files(uploaded_files):
             finally:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
-
-# メインアプリケーション
-show_auth_ui()
-
-if not st.session_state.user_state['is_premium']:
-    st.markdown("""
-    ### 🌟 プレミアム機能 (月額500円)
-    - ✨ 無制限の変換回数
-    - 📦 一度に10ファイルまで変換可能
-    - 📧 変換したファイルをメールで受信
-    - 💾 30日間のファイル保存
-    - 🚫 広告非表示
-    """)
-
-# ファイルアップロード
-uploaded_files = st.file_uploader(
-    "PDFファイルを選択",
-    type=['pdf'],
-    accept_multiple_files=True
-)
-
-if uploaded_files:
-    process_files(uploaded_files)
 
 # 保存されたファイルの表示（プレミアムユーザーのみ）
 if st.session_state.user_state['is_premium'] and st.session_state.user_state['stored_files']:
