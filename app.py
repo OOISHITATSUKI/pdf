@@ -446,73 +446,205 @@ def process_pdf(uploaded_file):
         if 'tmp_path' in locals():
             os.unlink(tmp_path)
 
+def process_multiple_pdfs(uploaded_files):
+    """複数のPDFファイルを処理する"""
+    try:
+        # 一時ファイル用のディレクトリを作成
+        with tempfile.TemporaryDirectory() as temp_dir:
+            all_results = []
+            
+            for uploaded_file in uploaded_files:
+                # 一時PDFファイルを作成
+                pdf_path = os.path.join(temp_dir, uploaded_file.name)
+                with open(pdf_path, 'wb') as f:
+                    f.write(uploaded_file.getvalue())
+                
+                # PDFの処理
+                document_structure = analyze_document_structure(pdf_path)
+                layout_info = extract_exact_layout(pdf_path)
+                
+                if document_structure and layout_info:
+                    result = {
+                        'filename': uploaded_file.name,
+                        'document_structure': document_structure,
+                        'layout_info': layout_info
+                    }
+                    all_results.append(result)
+            
+            if all_results:
+                # カテゴリ分類版Excelの作成
+                categorized_path = os.path.join(temp_dir, 'categorized_results.xlsx')
+                create_combined_excel(all_results, categorized_path)
+                
+                # 完全レイアウト版Excelの作成
+                layout_path = os.path.join(temp_dir, 'layout_results.xlsx')
+                create_combined_layout_excel(all_results, layout_path)
+                
+                return categorized_path, layout_path
+            
+            return None, None
+            
+    except Exception as e:
+        st.error(f"ファイル処理中にエラーが発生しました: {str(e)}")
+        return None, None
+
+def create_combined_excel(results, output_path):
+    """複数のPDFの結果を1つのExcelファイルにまとめる"""
+    try:
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            for idx, result in enumerate(results):
+                filename = result['filename']
+                doc_structure = result['document_structure']
+                
+                # カテゴリごとのDataFrameを作成
+                for category, items in doc_structure['classified_items'].items():
+                    sheet_name = f"{filename}_{category}"[:31]  # Excelのシート名制限
+                    
+                    df = pd.DataFrame(items)
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+        
+        return True
+    except Exception as e:
+        st.error(f"Excel作成中にエラーが発生しました: {str(e)}")
+        return False
+
+def create_combined_layout_excel(results, output_path):
+    """複数のPDFの完全レイアウトを1つのExcelファイルにまとめる"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, Border, Side
+        
+        wb = Workbook()
+        
+        for idx, result in enumerate(results):
+            filename = result['filename']
+            layout_info = result['layout_info']
+            
+            # 各PDFに対して新しいシートを作成
+            if idx == 0:
+                ws = wb.active
+                ws.title = f"Layout_{filename}"[:31]
+            else:
+                ws = wb.create_sheet(f"Layout_{filename}"[:31])
+            
+            # グリッドデータの配置
+            for i, row in enumerate(layout_info['grid']):
+                for j, cell in enumerate(row):
+                    if not cell['merged']:
+                        excel_cell = ws.cell(row=i+1, column=j+1, value=cell['text'])
+                        
+                        # スタイルの設定
+                        if cell['text'].replace(',', '').replace('¥', '').replace('(', '').replace(')', '').strip().isdigit():
+                            excel_cell.alignment = Alignment(horizontal='right', vertical='center')
+                        else:
+                            excel_cell.alignment = Alignment(horizontal='left', vertical='center')
+                        
+                        # 罫線の設定
+                        excel_cell.border = Border(
+                            left=Side(style='thin'),
+                            right=Side(style='thin'),
+                            top=Side(style='thin'),
+                            bottom=Side(style='thin')
+                        )
+            
+            # セル結合の適用
+            for merged_cell in layout_info['merged_cells']:
+                try:
+                    ws.merge_cells(
+                        start_row=merged_cell['start_row'] + 1,
+                        start_column=merged_cell['start_col'] + 1,
+                        end_row=merged_cell['end_row'],
+                        end_column=merged_cell['end_col']
+                    )
+                    
+                    cell = ws.cell(
+                        row=merged_cell['start_row'] + 1,
+                        column=merged_cell['start_col'] + 1,
+                        value=merged_cell['text']
+                    )
+                    cell.alignment = Alignment(horizontal='left', vertical='center')
+                except:
+                    continue
+            
+            # 列幅の調整
+            for col in ws.columns:
+                max_length = 0
+                column = get_column_letter(col[0].column)
+                for cell in col:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = (max_length + 2) * 1.2
+                ws.column_dimensions[column].width = adjusted_width
+            
+            # 行の高さを統一
+            for row in ws.rows:
+                ws.row_dimensions[row[0].row].height = 20
+        
+        wb.save(output_path)
+        return True
+        
+    except Exception as e:
+        st.error(f"Excel作成中にエラーが発生しました: {str(e)}")
+        return False
+
 # メインアプリケーション
 def main():
     show_auth_ui()
     
     st.title("PDF to Excel 変換ツール")
-    st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。")
+    st.markdown("PDFファイルをExcel形式に変換できます。")
     
-    # 利用制限の表示
-    if not st.session_state.user_state['is_premium']:
-        remaining = 5 - st.session_state.user_state['daily_conversions'] if st.session_state.user_state['is_logged_in'] else 3 - st.session_state.user_state['daily_conversions']
-        st.info(f"本日の残り変換回数: {remaining}回")
+    uploaded_files = st.file_uploader(
+        "PDFファイルを選択（複数可）", 
+        type=['pdf'],
+        accept_multiple_files=True
+    )
     
-    # ファイルアップロード
-    uploaded_file = st.file_uploader("PDFファイルを選択", type=['pdf'])
-
-    if uploaded_file:
-        if not check_conversion_limit():
-            if st.session_state.user_state['is_logged_in']:
-                st.error("本日の変換可能回数（5回）を超えました。プレミアムプランへのアップグレードをご検討ください。")
-            else:
-                st.error("本日の変換可能回数（3回）を超えました。アカウント登録で追加の2回が利用可能になります。")
-            return
-
+    if uploaded_files:
         with st.spinner('PDFを解析中...'):
-            excel_path, exact_excel_path = process_pdf(uploaded_file)
+            categorized_path, layout_path = process_multiple_pdfs(uploaded_files)
             
-            if excel_path and exact_excel_path:
+            if categorized_path and layout_path:
                 st.success("変換が完了しました！")
                 
-                # カテゴリ分類されたExcelのプレビュー
+                # カテゴリ分類版のプレビューと出力
                 st.subheader("📊 カテゴリ分類データ")
-                excel_file = pd.ExcelFile(excel_path)
+                excel_file = pd.ExcelFile(categorized_path)
                 for sheet_name in excel_file.sheet_names:
                     st.write(f"シート: {sheet_name}")
                     df = pd.read_excel(excel_file, sheet_name=sheet_name)
                     st.dataframe(df)
                 
-                # 完全レイアウトExcelのプレビュー
+                # 完全レイアウト版のプレビューと出力
                 st.subheader("📄 完全レイアウト")
-                exact_df = pd.read_excel(exact_excel_path)
-                st.dataframe(exact_df)
+                layout_excel = pd.ExcelFile(layout_path)
+                for sheet_name in layout_excel.sheet_names:
+                    st.write(f"シート: {sheet_name}")
+                    df = pd.read_excel(layout_excel, sheet_name=sheet_name)
+                    st.dataframe(df)
                 
                 # ダウンロードボタン
                 col1, col2 = st.columns(2)
                 with col1:
-                    with open(excel_path, 'rb') as f:
+                    with open(categorized_path, 'rb') as f:
                         st.download_button(
                             label="📥 カテゴリ分類データをダウンロード",
                             data=f,
-                            file_name=f'categorized_{uploaded_file.name}.xlsx',
+                            file_name='categorized_results.xlsx',
                             mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                         )
                 
                 with col2:
-                    with open(exact_excel_path, 'rb') as f:
+                    with open(layout_path, 'rb') as f:
                         st.download_button(
                             label="📥 完全レイアウトをダウンロード",
                             data=f,
-                            file_name=f'exact_{uploaded_file.name}.xlsx',
+                            file_name='layout_results.xlsx',
                             mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                         )
-                
-                os.remove(excel_path)
-                os.remove(exact_excel_path)
-                
-                if not st.session_state.user_state['is_premium']:
-                    st.session_state.user_state['daily_conversions'] += 1
 
 if __name__ == "__main__":
     main() 
