@@ -9,6 +9,9 @@ import hashlib
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Stripe関連のコードは一時的にコメントアウト
 # import stripe
@@ -31,7 +34,8 @@ if 'user_state' not in st.session_state:
         'is_logged_in': False,
         'is_premium': False,
         'email': None,
-        'conversion_count': 0
+        'daily_conversions': 0,
+        'last_conversion_date': None
     }
 
 # ユーザー登録（セッションベース）
@@ -177,7 +181,8 @@ def show_auth_ui():
                 'is_logged_in': False,
                 'is_premium': False,
                 'email': None,
-                'conversion_count': 0
+                'daily_conversions': 0,
+                'last_conversion_date': None
             }
             st.rerun()
 
@@ -260,7 +265,7 @@ def main():
                                 pass
                             
                             if not st.session_state.user_state['is_premium']:
-                                st.session_state.user_state['conversion_count'] += 1
+                                st.session_state.user_state['daily_conversions'] += 1
                         else:
                             st.warning("PDFからデータを抽出できませんでした")
                     
@@ -292,7 +297,7 @@ def process_files(uploaded_files):
         st.error(f"⚠️ 一度に変換できるのは最大{max_files}ファイルまでです")
         return
     
-    if not st.session_state.user_state['is_premium'] and st.session_state.user_state['conversion_count'] >= 3:
+    if not st.session_state.user_state['is_premium'] and st.session_state.user_state['daily_conversions'] >= 3:
         st.error("⚠️ 無料プランの変換可能回数を超えました。プレミアムにアップグレードすると無制限で変換できます。")
         return
     
@@ -346,7 +351,7 @@ def process_files(uploaded_files):
                                 if st.button("📧 メールで受け取る"):
                                     send_excel_email(st.session_state.user_state['email'], excel_file)
                         else:
-                            st.session_state.user_state['conversion_count'] += 1
+                            st.session_state.user_state['daily_conversions'] += 1
 
                         with open(excel_file, 'rb') as f:
                             st.download_button(
@@ -726,4 +731,210 @@ def process_pdf_file(uploaded_file):
             os.remove(tmp_path)
             
     except Exception as e:
-        st.error(f"処理中にエラーが発生しました: {str(e)}") 
+        st.error(f"処理中にエラーが発生しました: {str(e)}")
+
+def check_conversion_limit():
+    """変換制限をチェック"""
+    current_date = datetime.now().date()
+    
+    # 日付が変わった場合はカウントをリセット
+    if st.session_state.user_state['last_conversion_date'] != current_date:
+        st.session_state.user_state['daily_conversions'] = 0
+        st.session_state.user_state['last_conversion_date'] = current_date
+
+    if st.session_state.user_state['is_premium']:
+        return True
+    elif st.session_state.user_state['is_logged_in']:
+        return st.session_state.user_state['daily_conversions'] < 5
+    else:
+        return st.session_state.user_state['daily_conversions'] < 3
+
+def analyze_table_structure(page):
+    """PDFページからテーブル構造を詳細に分析"""
+    words = page.extract_words(
+        keep_blank_chars=True,
+        x_tolerance=3,
+        y_tolerance=3,
+        extra_attrs=['fontname', 'size']
+    )
+    
+    # テーブルの検出と構造分析
+    tables = page.find_tables(
+        table_settings={
+            "vertical_strategy": "text",
+            "horizontal_strategy": "text",
+            "snap_tolerance": 3,
+            "join_tolerance": 3,
+            "edge_min_length": 3,
+            "min_words_vertical": 3,
+            "min_words_horizontal": 1
+        }
+    )
+    
+    table_structures = []
+    for table in tables:
+        cells = []
+        for row_idx, row in enumerate(table.cells):
+            for col_idx, cell in enumerate(row):
+                if cell is not None:
+                    # セルの内容を取得
+                    cell_text = cell.extract()
+                    if cell_text:
+                        # セルの位置情報を保存
+                        cells.append({
+                            'text': cell_text.strip(),
+                            'row': row_idx,
+                            'col': col_idx,
+                            'bbox': cell.bbox,
+                            'merged': False
+                        })
+        
+        # セルの結合を検出
+        merged_cells = []
+        for i, cell in enumerate(cells):
+            if not cell['merged']:
+                # 横方向の結合をチェック
+                merge_width = 1
+                merge_height = 1
+                
+                # 横方向のチェック
+                next_col = cell['col'] + 1
+                while next_col < table.shape[1]:
+                    if any(c['row'] == cell['row'] and c['col'] == next_col for c in cells):
+                        break
+                    merge_width += 1
+                    next_col += 1
+                
+                # 縦方向のチェック
+                next_row = cell['row'] + 1
+                while next_row < table.shape[0]:
+                    if any(c['col'] == cell['col'] and c['row'] == next_row for c in cells):
+                        break
+                    merge_height += 1
+                    next_row += 1
+                
+                if merge_width > 1 or merge_height > 1:
+                    merged_cells.append({
+                        'start_row': cell['row'],
+                        'start_col': cell['col'],
+                        'end_row': cell['row'] + merge_height - 1,
+                        'end_col': cell['col'] + merge_width - 1,
+                        'text': cell['text']
+                    })
+        
+        table_structures.append({
+            'cells': cells,
+            'merged_cells': merged_cells,
+            'shape': table.shape
+        })
+    
+    return table_structures
+
+def create_formatted_excel(table_structures, output_path):
+    """フォーマットを保持してExcelファイルを作成"""
+    wb = Workbook()
+    ws = wb.active
+    
+    # 基本的なスタイル設定
+    default_font = Font(name='Yu Gothic', size=10)
+    header_font = Font(name='Yu Gothic', bold=True, size=11)
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    for table_idx, table in enumerate(table_structures):
+        # セルの内容を書き込み
+        for cell in table['cells']:
+            ws.cell(
+                row=cell['row'] + 1,
+                column=cell['col'] + 1,
+                value=cell['text']
+            ).font = default_font
+        
+        # セルの結合を適用
+        for merge in table['merged_cells']:
+            ws.merge_cells(
+                start_row=merge['start_row'] + 1,
+                start_column=merge['start_col'] + 1,
+                end_row=merge['end_row'] + 1,
+                end_column=merge['end_col'] + 1
+            )
+            merged_cell = ws.cell(
+                row=merge['start_row'] + 1,
+                column=merge['start_col'] + 1
+            )
+            merged_cell.value = merge['text']
+            merged_cell.alignment = Alignment(horizontal='center', vertical='center')
+        
+        # 列幅の調整
+        for col in range(1, table['shape'][1] + 1):
+            ws.column_dimensions[get_column_letter(col)].width = 15
+    
+    wb.save(output_path)
+
+def process_pdf_file(uploaded_file):
+    """PDFファイルを処理"""
+    try:
+        # 変換制限のチェック
+        if not check_conversion_limit():
+            if st.session_state.user_state['is_logged_in']:
+                st.error("本日の変換可能回数（5回）を超えました。プレミアムプランへのアップグレードをご検討ください。")
+            else:
+                st.error("本日の変換可能回数（3回）を超えました。アカウント登録で追加の2回が利用可能になります。")
+            return
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_path = tmp_file.name
+            
+            with pdfplumber.open(tmp_path) as pdf:
+                all_tables = []
+                for page in pdf.pages:
+                    table_structures = analyze_table_structure(page)
+                    all_tables.extend(table_structures)
+            
+            if all_tables:
+                excel_path = f'converted_{uploaded_file.name}.xlsx'
+                create_formatted_excel(all_tables, excel_path)
+                
+                st.success("変換が完了しました！")
+                
+                # プレビューの表示
+                for table_idx, table in enumerate(all_tables):
+                    st.write(f"テーブル {table_idx + 1}:")
+                    preview_data = []
+                    for cell in table['cells']:
+                        while len(preview_data) <= cell['row']:
+                            preview_data.append([''] * table['shape'][1])
+                        preview_data[cell['row']][cell['col']] = cell['text']
+                    
+                    df = pd.DataFrame(preview_data)
+                    st.dataframe(df)
+                
+                # ダウンロードボタン
+                with open(excel_path, 'rb') as f:
+                    st.download_button(
+                        label="📥 Excelファイルをダウンロード",
+                        data=f,
+                        file_name=excel_path,
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
+                
+                os.remove(excel_path)
+                
+                # 変換回数をカウントアップ
+                if not st.session_state.user_state['is_premium']:
+                    st.session_state.user_state['daily_conversions'] += 1
+            
+            os.remove(tmp_path)
+            
+    except Exception as e:
+        st.error(f"処理中にエラーが発生しました: {str(e)}")
+
+# requirements.txtに追加が必要なパッケージ
+"""
+openpyxl
+""" 
