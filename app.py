@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Google Cloud Vision APIの初期化
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.getenv('GOOGLE_VISION_API_KEY')
 vision_client = vision.ImageAnnotatorClient()
 
 # ページ設定（必ず最初に実行）
