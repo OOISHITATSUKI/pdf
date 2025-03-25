@@ -5,6 +5,7 @@ import tempfile
 import os
 import time
 from datetime import datetime, timedelta
+import hashlib
 
 # ページ設定
 st.set_page_config(
@@ -19,8 +20,43 @@ if 'user_state' not in st.session_state:
         'is_logged_in': False,        # ログイン状態
         'is_premium': False,          # 有料会員状態
         'daily_conversions': 0,       # 今日の変換回数
-        'last_conversion_date': None  # 最後の変換日
+        'last_conversion_date': None, # 最後の変換日
+        'email': None
     }
+
+# ユーザーデータベースの初期化（実際の実装ではデータベースを使用）
+if 'users' not in st.session_state:
+    st.session_state.users = {}
+
+def hash_password(password):
+    """パスワードをハッシュ化"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def register_user(email, password):
+    """ユーザー登録"""
+    if email in st.session_state.users:
+        return False, "このメールアドレスは既に登録されています"
+    
+    st.session_state.users[email] = {
+        'password': hash_password(password),
+        'is_premium': False,
+        'daily_conversions': 0,
+        'last_conversion_date': None
+    }
+    return True, "登録が完了しました"
+
+def login_user(email, password):
+    """ユーザーログイン"""
+    if email not in st.session_state.users:
+        return False, "メールアドレスが見つかりません"
+    
+    if st.session_state.users[email]['password'] != hash_password(password):
+        return False, "パスワードが正しくありません"
+    
+    st.session_state.user_state['is_logged_in'] = True
+    st.session_state.user_state['email'] = email
+    st.session_state.user_state['is_premium'] = st.session_state.users[email]['is_premium']
+    return True, "ログインしました"
 
 def check_conversion_limit():
     """ユーザーの変換制限をチェックする関数"""
@@ -48,78 +84,61 @@ def increment_conversion_count():
 # カスタムCSSの追加
 st.markdown("""
 <style>
-    /* 既存のスタイルをリセット */
-    #root > div:nth-child(1) > div > div > div > div > section > div {
-        padding-top: 0rem;
+    /* 全体の背景にグラデーション */
+    .stApp {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     }
     
-    /* ヘッダーコンテナ */
+    /* ヘッダー部分のスタイル */
     .header-container {
-        position: fixed;
-        top: 0;
-        right: 0;
-        padding: 1rem 2rem;
         background: white;
-        z-index: 1000;
-        border-bottom-left-radius: 10px;
+        padding: 2rem;
+        border-radius: 15px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        margin-bottom: 2rem;
+    }
+    
+    /* ログインボタンのスタイル */
+    .stButton>button {
+        background: linear-gradient(45deg, #2196F3, #21CBF3);
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 25px;
         box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
     }
     
-    /* ユーザー情報 */
-    .user-info {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
     }
     
-    /* バッジスタイル */
+    /* アップロードエリアのスタイル */
+    .uploadfile {
+        background: white;
+        border-radius: 15px;
+        padding: 2rem;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* プレミアムバッジのスタイル */
     .premium-badge {
         background: linear-gradient(45deg, #FFD700, #FFA500);
         color: white;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-weight: bold;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        padding: 0.5rem 1rem;
+        border-radius: 25px;
+        text-align: center;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     }
     
+    /* 無料バッジのスタイル */
     .free-badge {
-        background: #f0f2f6;
-        color: #666;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-weight: bold;
-    }
-    
-    /* 残り回数表示 */
-    .remaining-count {
-        color: #666;
-        font-size: 0.9rem;
-    }
-    
-    /* アップグレードボタン */
-    .upgrade-button {
-        background: linear-gradient(45deg, #FFD700, #FFA500);
+        background: linear-gradient(45deg, #e0e0e0, #b0b0b0);
         color: white;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        text-decoration: none;
-        font-weight: bold;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    
-    /* ログインボタン */
-    .login-button {
-        background: #0066cc;
-        color: white;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        text-decoration: none;
-        font-weight: bold;
-    }
-    
-    /* メインコンテンツのパディング調整 */
-    .main-content {
-        padding-top: 4rem;
+        padding: 0.5rem 1rem;
+        border-radius: 25px;
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -168,34 +187,52 @@ st.markdown('<div class="main-content">', unsafe_allow_html=True)
 header_left, header_right = st.columns([3, 1])
 
 with header_left:
-    st.title("PDF to Excel 変換ツール")
-    st.markdown("PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。")
+    st.markdown("""
+    <div class="header-container">
+        <h1>PDF to Excel 変換ツール</h1>
+        <p>PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 with header_right:
-    # ユーザー状態の表示
-    if st.session_state.user_state['is_logged_in']:
+    if not st.session_state.user_state['is_logged_in']:
+        if st.button("ログイン / 新規登録"):
+            st.session_state['show_auth'] = True
+    else:
         if st.session_state.user_state['is_premium']:
             st.markdown("""
-                <div style="text-align: right; padding: 10px; background: linear-gradient(45deg, #FFD700, #FFA500); 
-                border-radius: 10px; color: white; margin-bottom: 10px;">
+                <div class="premium-badge">
                     🌟 プレミアム会員
                 </div>
                 """, unsafe_allow_html=True)
         else:
             remaining = 3 - st.session_state.user_state['daily_conversions']
             st.markdown(f"""
-                <div style="text-align: right; padding: 10px; background: #f0f2f6; 
-                border-radius: 10px; margin-bottom: 10px;">
+                <div class="free-badge">
                     無料会員 (残り {remaining}回)
                 </div>
                 """, unsafe_allow_html=True)
-            st.button("🌟 プレミアムに変更", key="upgrade_button")
-    else:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.button("ログイン", key="login_button")
-        with col2:
-            st.button("新規登録", key="signup_button")
+            st.button("🌟 プレミアムに変更")
+
+# 認証フォーム
+if st.session_state.get('show_auth', False) and not st.session_state.user_state['is_logged_in']:
+    with st.form("auth_form"):
+        auth_type = st.radio("", ["ログイン", "新規登録"])
+        email = st.text_input("メールアドレス")
+        password = st.text_input("パスワード", type="password")
+        
+        if st.form_submit_button("送信"):
+            if auth_type == "新規登録":
+                success, message = register_user(email, password)
+            else:
+                success, message = login_user(email, password)
+            
+            if success:
+                st.success(message)
+                st.session_state['show_auth'] = False
+                st.experimental_rerun()
+            else:
+                st.error(message)
 
 # ファイルアップロード
 st.markdown('<div class="upload-area">', unsafe_allow_html=True)
