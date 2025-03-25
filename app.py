@@ -466,8 +466,15 @@ def get_conversion_limit(user_id=None):
     return get_plan_limits(plan)
 
 def process_pdf(uploaded_file, document_type=None, document_date=None):
-    """PDFの処理を行う関数"""
+    """PDFを処理してExcelに変換する関数"""
     try:
+        # 変換回数制限のチェック
+        user_id = st.session_state.get('user_id')
+        if not check_conversion_limit(user_id):
+            st.error("本日の変換回数制限に達しました。プランをアップグレードするか、明日以降に再度お試しください。")
+            return None
+
+        # 変換処理の実行
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
             temp_pdf.write(uploaded_file.getvalue())
             pdf_path = temp_pdf.name
@@ -600,10 +607,17 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
             os.unlink(pdf_path)
             os.unlink(temp_excel.name)
 
+            # 変換成功時にカウントをインクリメント
+            if increment_conversion_count(user_id):
+                st.success("変換が完了しました！")
+            else:
+                st.error("変換回数の更新に失敗しました。")
+
             return excel_data
 
     except Exception as e:
-        raise Exception(f"PDFの処理中にエラーが発生しました: {str(e)}")
+        st.error(f"PDFの処理中にエラーが発生しました: {str(e)}")
+        return None
 
 def get_document_type_label(doc_type):
     """ドキュメントタイプのコードから表示用ラベルを取得"""
@@ -619,7 +633,7 @@ def get_document_type_label(doc_type):
     return type_map.get(doc_type, "不明な書類")
 
 def display_conversion_count():
-    """変換回数の表示"""
+    """変換回数の表示（フロントエンド側）"""
     try:
         user_id = st.session_state.get('user_id')
         daily_count = tracker.get_daily_count(user_id)
