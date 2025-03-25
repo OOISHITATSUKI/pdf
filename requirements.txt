@@ -36,4 +36,7 @@ psycopg2-binary==2.9.9  # PostgreSQL用
 redis==5.0.1
 
 # 追加されたパッケージ
-python-dotenv==1.0.1 
+python-dotenv==1.0.1
+
+# PDFプレビュー用
+poppler-utils==0.1.0  # Popplerの依存関係 

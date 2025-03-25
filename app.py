@@ -308,26 +308,19 @@ def increment_conversion_count(user_id: str) -> bool:
     finally:
         conn.close()
 
-def check_conversion_limit(user_id: str) -> bool:
-    """変換制限をチェック"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # ユーザーの種類を確認
-    c.execute('SELECT plan_type FROM users WHERE id = ?', (user_id,))
-    result = c.fetchone()
-    plan_type = result[0] if result else 'free'
-    
-    # 本日の変換回数を取得
-    daily_count = get_daily_conversion_count(user_id)
-    
-    # プランごとの制限チェック
-    if plan_type == 'premium':
-        return True  # 無制限
-    elif plan_type == 'basic':
-        return daily_count < 5  # 1日5回まで
-    else:  # free
-        return daily_count < 3  # 1日3回まで
+def check_conversion_limit(user_id: Optional[str] = None) -> bool:
+    """変換制限のチェック（バックエンド側）"""
+    try:
+        daily_count = tracker.get_daily_count(user_id)
+        limit = tracker.get_plan_limit(user_id)
+        
+        # デバッグ情報の出力
+        st.write(f"現在の変換回数: {daily_count}/{limit}")
+        
+        return daily_count < limit
+    except Exception as e:
+        st.error(f"変換制限のチェック中にエラーが発生しました: {str(e)}")
+        return False
 
 # セッション状態の初期化
 if 'user_id' not in st.session_state:
