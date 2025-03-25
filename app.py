@@ -15,9 +15,9 @@ from sqlalchemy.sql import func
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
-# ページ設定
+# ページ設定（必ず最初に実行）
 st.set_page_config(
-    page_title="PDF to Excel 変換ツール｜無料でPDFの表をExcelに変換",
+    page_title="PDF to Excel 変換ツール",
     page_icon="📄",
     layout="wide"
 )
