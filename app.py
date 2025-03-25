@@ -398,87 +398,87 @@ def is_tax_return_pdf(pdf_path):
 def process_tax_return_pdf(page):
     """確定申告書専用の処理"""
     try:
-        # テキストブロックを抽出
-        blocks = []
-        for word in page.extract_words(
+        # テキストとレイアウト情報を抽出
+        text = page.extract_text()
+        words = page.extract_words(
             keep_blank_chars=False,
             x_tolerance=1,
             y_tolerance=1,
             extra_attrs=['fontname', 'size']
-        ):
+        )
+
+        # テキストブロックを構造化
+        blocks = []
+        for word in words:
             if word['text'].strip():
                 # CIDフォントの処理
-                text = re.sub(r'\(cid:\d+\)', '', word['text'])
+                cleaned_text = re.sub(r'\(cid:\d+\)', '', word['text'])
                 
                 # 数値の処理
-                numbers = re.findall(r'[\d,]+', text)
+                numbers = re.findall(r'[\d,]+', cleaned_text)
                 for num in numbers:
                     try:
                         value = int(num.replace(',', ''))
-                        text = text.replace(num, f'{value:,}')
+                        cleaned_text = cleaned_text.replace(num, f'{value:,}')
                     except ValueError:
                         continue
                 
-                block_id = f"{word['x0']}_{word['top']}"  # ユニークなID作成
+                # 位置情報をタプルとして保存
+                position = (
+                    float(word['x0']),
+                    float(word['top']),
+                    float(word['x1']),
+                    float(word['bottom'])
+                )
+                
                 blocks.append({
-                    'id': block_id,  # ユニークなIDを追加
-                    'text': text.strip(),
-                    'bbox': (word['x0'], word['top'], word['x1'], word['bottom']),
-                    'fontname': word.get('fontname', ''),
-                    'size': word.get('size', 0)
+                    'text': cleaned_text.strip(),
+                    'position': position,  # タプルとして保存
+                    'fontname': str(word.get('fontname', '')),
+                    'size': float(word.get('size', 0))
                 })
-        
-        # テンプレート認識（様式番号に基づく）
-        form_patterns = {
+
+        # 申告書の種類を判定
+        form_types = {
             '所得税': '所得税及び復興特別所得税の申告書',
             '法人税': '法人税申告書',
             '消費税': '消費税及び地方消費税の申告書',
             '源泉所得税': '源泉所得税の申告書'
         }
-        
+
         form_type = None
-        for key, pattern in form_patterns.items():
-            if any(pattern in block['text'] for block in blocks):
+        for key, pattern in form_types.items():
+            if pattern in text:
                 form_type = key
                 break
-        
-        # フォームタイプに応じた処理
+
         if form_type:
             st.info(f"📄 {form_type}の申告書として処理します")
             
-            # 表形式データの抽出
-            tables = []
-            current_table = []
-            current_y = None
+            # 行ごとにグループ化
+            rows = {}
             y_tolerance = 5
             
-            # y座標でソート
-            sorted_blocks = sorted(blocks, key=lambda x: x['bbox'][1])
-            
-            for block in sorted_blocks:
-                if current_y is None:
-                    current_y = block['bbox'][1]
-                    current_table.append(block)
-                elif abs(block['bbox'][1] - current_y) <= y_tolerance:
-                    current_table.append(block)
-                else:
-                    if current_table:
-                        # x座標でソート
-                        sorted_table = sorted(current_table, key=lambda x: x['bbox'][0])
-                        tables.append(sorted_table)
-                    current_table = [block]
-                    current_y = block['bbox'][1]
-            
-            if current_table:
-                sorted_table = sorted(current_table, key=lambda x: x['bbox'][0])
-                tables.append(sorted_table)
-            
-            return tables
-            
+            for block in blocks:
+                y_pos = block['position'][1]  # top座標
+                row_key = int(y_pos / y_tolerance) * y_tolerance
+                
+                if row_key not in rows:
+                    rows[row_key] = []
+                rows[row_key].append(block)
+
+            # 行ごとにソートして結果を作成
+            result = []
+            for y_pos in sorted(rows.keys()):
+                # 各行を左から右にソート
+                sorted_row = sorted(rows[y_pos], key=lambda x: x['position'][0])
+                result.append(sorted_row)
+
+            return result
         else:
             st.warning("⚠️ 申告書の種類を特定できませんでした。一般的なPDFとして処理します。")
             return blocks
-            
+
     except Exception as e:
         st.error(f"確定申告書の処理中にエラーが発生しました: {str(e)}")
         return []
