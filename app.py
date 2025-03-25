@@ -4,16 +4,16 @@ import pandas as pd
 import tempfile
 import os
 from datetime import datetime, timedelta
-import stripe
+import sqlite3
 import hashlib
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
-import sqlite3
 
-# Stripe設定（実際の値に置き換えが必要）
-stripe.api_key = st.secrets["stripe"]["api_key"]
-PRICE_ID = st.secrets["stripe"]["price_id"]
+# Stripe関連のコードは一時的にコメントアウト
+# import stripe
+# stripe.api_key = st.secrets["stripe"]["api_key"]
+# PRICE_ID = st.secrets["stripe"]["price_id"]
 
 # ページ設定
 st.set_page_config(
