@@ -20,14 +20,35 @@ st.set_page_config(
 if 'users' not in st.session_state:
     st.session_state.users = {}
 
-if 'user_state' not in st.session_state:
-    st.session_state.user_state = {
-        'is_logged_in': False,
-        'is_premium': False,
-        'email': None,
-        'daily_conversions': 0,
-        'last_conversion_date': None
-    }
+def initialize_session_state():
+    """セッション状態の初期化とローカルストレージとの同期"""
+    if 'user_state' not in st.session_state:
+        st.session_state.user_state = {
+            'is_logged_in': False,
+            'is_premium': False,
+            'email': None,
+            'daily_conversions': 0,
+            'last_conversion_date': None,
+            'device_id': None  # デバイス識別用
+        }
+    
+    # ローカルストレージからの読み込み用JavaScript
+    st.markdown("""
+        <script>
+            const deviceId = localStorage.getItem('deviceId') || Date.now().toString();
+            localStorage.setItem('deviceId', deviceId);
+            
+            const conversions = localStorage.getItem('dailyConversions') || '0';
+            const lastDate = localStorage.getItem('lastConversionDate');
+            
+            window.parent.postMessage({
+                type: 'getLocalStorage',
+                deviceId: deviceId,
+                conversions: conversions,
+                lastDate: lastDate
+            }, '*');
+        </script>
+    """, unsafe_allow_html=True)
 
 # ユーザー登録
 def register_user(email, password):
@@ -785,28 +806,22 @@ def create_conversion_section():
     with col1:
         st.markdown("### ファイルをアップロード")
         
-        # 利用制限の表示
+        # 利用制限の表示と更新（セッション初期化の修正）
+        if 'last_conversion_date' not in st.session_state.user_state:
+            st.session_state.user_state['last_conversion_date'] = datetime.now().date()
+            st.session_state.user_state['daily_conversions'] = 0
+        
         current_date = datetime.now().date()
         if st.session_state.user_state['last_conversion_date'] != current_date:
             st.session_state.user_state['daily_conversions'] = 0
             st.session_state.user_state['last_conversion_date'] = current_date
         
-        if st.session_state.user_state['is_premium']:
-            limit_text = "無制限"
-        elif st.session_state.user_state['is_logged_in']:
-            remaining = 5 - st.session_state.user_state['daily_conversions']
-            limit_text = f"本日：残り {remaining} / 5 ファイル"
-        else:
-            remaining = 3 - st.session_state.user_state['daily_conversions']
-            limit_text = f"本日：残り {remaining} / 3 ファイル"
-        
-        st.markdown(f"📊 {limit_text}")
-        
-        # ファイルアップロード
+        # ファイルアップロードの権限チェックを修正
         uploaded_file = st.file_uploader(
             "クリックまたはドラッグ＆ドロップでPDFファイルを選択",
             type=['pdf'],
-            accept_multiple_files=st.session_state.user_state['is_premium']
+            accept_multiple_files=st.session_state.user_state.get('is_premium', False),
+            key="pdf_uploader"  # キーを固定して状態を保持
         )
         
         # プラン説明
@@ -881,6 +896,60 @@ def show_footer():
     with col4:
         st.markdown("[利用規約](javascript:void(0))")
 
+def create_invoice_summary(layout_info):
+    """請求書の項目別サマリーを作成"""
+    try:
+        # 項目の定義
+        item_patterns = {
+            '品名': r'品名|商品名|項目|内容',
+            '数量': r'数量|個数',
+            '単価': r'単価|価格',
+            '金額': r'金額|価格',
+            '税額': r'税額|消費税額',
+            '合計': r'合計|総額'
+        }
+        
+        # 項目ごとのデータ抽出
+        summary_data = {
+            '品名': [],
+            '数量': [],
+            '単価': [],
+            '金額': [],
+            '税額': [],
+            '合計': []
+        }
+        
+        # テキストから項目を抽出
+        for text_obj in layout_info['texts']:
+            text = text_obj['text']
+            
+            # 数値の抽出と整形
+            numbers = re.findall(r'[\d,]+', text)
+            for num in numbers:
+                try:
+                    value = int(num.replace(',', ''))
+                    # 金額っぽい値の場合
+                    if value > 100:
+                        summary_data['金額'].append(value)
+                except ValueError:
+                    continue
+        
+        # サマリーシートの作成
+        summary_df = pd.DataFrame({
+            '項目': ['小計', '消費税', '合計'],
+            '金額': [
+                sum(summary_data['金額']),
+                int(sum(summary_data['金額']) * 0.1),  # 消費税10%
+                int(sum(summary_data['金額']) * 1.1)   # 税込合計
+            ]
+        })
+        
+        return summary_df
+        
+    except Exception as e:
+        st.error(f"サマリー作成中にエラーが発生しました: {str(e)}")
+        return None
+
 def main():
     create_hero_section()
     show_auth_ui()
@@ -889,4 +958,5 @@ def main():
     show_footer()
 
 if __name__ == "__main__":
+    initialize_session_state()
     main() 
