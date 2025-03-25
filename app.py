@@ -129,52 +129,33 @@ def check_conversion_limit():
         return st.session_state.user_state['daily_conversions'] < 3
 
 def analyze_document_structure(pdf_path):
-    """帳票の構造を解析し、項目の位置を特定する"""
+    """PDFの構造を解析する"""
     try:
         with pdfplumber.open(pdf_path) as pdf:
             page = pdf.pages[0]
             
-            # テキストの抽出と位置情報の取得
-            texts = page.extract_words(
-                keep_blank_chars=True,
-                x_tolerance=3,
-                y_tolerance=3
-            )
-            
-            # 勘定科目のパターンを定義
-            account_patterns = {
-                '売上': r'売上|収入|営業収益',
-                '経費': r'経費|販売費|一般管理費',
-                '資産': r'資産|現金|預金|売掛金',
-                '負債': r'負債|借入金|買掛金',
-                '税金': r'税金|法人税|消費税'
-            }
-            
-            # 項目の分類
-            classified_items = {}
-            for text in texts:
-                for category, pattern in account_patterns.items():
-                    if re.search(pattern, text['text']):
-                        if category not in classified_items:
-                            classified_items[category] = []
-                        classified_items[category].append({
-                            'text': text['text'],
-                            'x0': text['x0'],
-                            'y0': text['top'],
-                            'x1': text['x1'],
-                            'y1': text['bottom']
-                        })
-            
-            # 表の検出
+            # まずテーブルの抽出を試みる
             tables = page.extract_tables()
             
-            return {
-                'texts': texts,
-                'classified_items': classified_items,
-                'tables': tables
-            }
+            if tables:
+                # テーブルが見つかった場合の処理
+                items = []
+                for table in tables:
+                    for row in table:
+                        if any(row):  # 空でない行のみ処理
+                            items.append({
+                                'text': ' '.join(str(cell) for cell in row if cell),
+                                'type': 'table_row'
+                            })
+            else:
+                # テーブルが見つからない場合はテキストとして抽出
+                texts = page.extract_text().split('\n')
+                items = [{'text': text, 'type': 'text'} for text in texts if text.strip()]
+            
+            return {'items': items}
+            
     except Exception as e:
-        st.error(f"帳票構造の解析中にエラーが発生しました: {str(e)}")
+        st.error(f"PDF解析中にエラーが発生しました: {str(e)}")
         return None
 
 def extract_numerical_values(text):
@@ -189,162 +170,73 @@ def extract_numerical_values(text):
             continue
     return cleaned_numbers
 
-def create_excel_output(document_structure, output_path):
-    """抽出したデータをExcelファイルに出力"""
+def create_excel_output(items, output_path):
+    """抽出したデータをExcelに出力"""
     try:
-        # カテゴリごとのDataFrameを作成
-        dfs = {}
+        # DataFrameの作成
+        df = pd.DataFrame([{'内容': item['text']} for item in items])
         
-        # 分類された項目の処理
-        for category, items in document_structure['classified_items'].items():
-            data = []
-            for item in items:
-                # 項目名の周辺で数値を探索
-                nearby_texts = [t for t in document_structure['texts'] 
-                              if abs(t['top'] - item['y0']) < 10]
-                values = []
-                for text in nearby_texts:
-                    values.extend(extract_numerical_values(text['text']))
-                
-                data.append({
-                    '項目': item['text'],
-                    '金額': values[0] if values else 0
-                })
-            
-            if data:
-                dfs[category] = pd.DataFrame(data)
-        
-        # テーブルデータの処理
-        if document_structure['tables']:
-            table_data = []
-            for table in document_structure['tables']:
-                if table:  # テーブルが空でない場合
-                    df = pd.DataFrame(table[1:], columns=table[0] if table[0] else None)
-                    table_data.append(df)
-            
-            if table_data:
-                dfs['テーブルデータ'] = pd.concat(table_data, ignore_index=True)
-        
-        # Excelファイルに出力
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            for category, df in dfs.items():
-                df.to_excel(writer, sheet_name=category, index=False)
-        
+        # Excelファイルとして保存
+        df.to_excel(output_path, index=False, engine='openpyxl')
         return True
     except Exception as e:
-        st.error(f"Excel出力中にエラーが発生しました: {str(e)}")
+        st.error(f"Excel作成中にエラーが発生しました: {str(e)}")
         return False
 
 def extract_exact_layout(pdf_path):
-    """PDFの完全なレイアウトを抽出してExcelに再現する"""
+    """PDFの完全なレイアウトを抽出する"""
     try:
         with pdfplumber.open(pdf_path) as pdf:
             page = pdf.pages[0]
             
-            # 全ての要素を抽出
+            # テキストの抽出（位置情報付き）
             texts = page.extract_words(
                 keep_blank_chars=True,
                 x_tolerance=1,
                 y_tolerance=1
             )
             
-            # 罫線情報の取得と整理
+            # 罫線情報の取得
             edges = page.edges
             horizontals = sorted([e for e in edges if e['orientation'] == 'horizontal'], key=lambda x: x['y0'])
             verticals = sorted([e for e in edges if e['orientation'] == 'vertical'], key=lambda x: x['x0'])
             
-            # グリッドの作成
-            grid = []
-            for i in range(len(horizontals) - 1):
-                row = []
-                for j in range(len(verticals) - 1):
-                    # セルの境界を定義
-                    cell = {
-                        'x0': verticals[j]['x0'],
-                        'x1': verticals[j + 1]['x0'],
-                        'y0': horizontals[i]['y0'],
-                        'y1': horizontals[i + 1]['y0'],
-                        'merged': False,
-                        'text': ''
-                    }
-                    
-                    # セル内のテキストを検索
-                    cell_texts = [
-                        t for t in texts
-                        if t['x0'] >= cell['x0'] - 2 and t['x1'] <= cell['x1'] + 2
-                        and t['top'] >= cell['y0'] - 2 and t['bottom'] <= cell['y1'] + 2
-                    ]
-                    
-                    if cell_texts:
-                        cell['text'] = ' '.join(t['text'] for t in cell_texts)
-                    
-                    row.append(cell)
-                grid.append(row)
+            # テーブルの抽出
+            tables = page.extract_tables()
             
-            # セル結合の検出
-            merged_cells = []
-            for i in range(len(grid)):
-                for j in range(len(grid[i])):
-                    if grid[i][j]['merged']:
-                        continue
-                    
-                    # 横方向の結合を検出
-                    merge_width = 1
-                    while j + merge_width < len(grid[i]):
-                        next_cell = grid[i][j + merge_width]
-                        if next_cell['text'] == '' and not next_cell['merged']:
-                            merge_width += 1
-                        else:
-                            break
-                    
-                    # 縦方向の結合を検出
-                    merge_height = 1
-                    while i + merge_height < len(grid):
-                        next_row_cell = grid[i + merge_height][j]
-                        if next_row_cell['text'] == '' and not next_row_cell['merged']:
-                            merge_height += 1
-                        else:
-                            break
-                    
-                    # 結合セルとして記録
-                    if merge_width > 1 or merge_height > 1:
-                        merged_cell = {
-                            'start_row': i,
-                            'end_row': i + merge_height,
-                            'start_col': j,
-                            'end_col': j + merge_width,
-                            'text': grid[i][j]['text']
-                        }
-                        merged_cells.append(merged_cell)
-                        
-                        # 結合されたセルをマーク
-                        for mi in range(i, i + merge_height):
-                            for mj in range(j, j + merge_width):
-                                if mi < len(grid) and mj < len(grid[mi]):
-                                    grid[mi][mj]['merged'] = True
+            # セルの位置情報を計算
+            cells = []
+            if tables:
+                for table in tables:
+                    for i, row in enumerate(table):
+                        for j, cell in enumerate(row):
+                            if cell:
+                                cells.append({
+                                    'text': str(cell),
+                                    'row': i,
+                                    'col': j
+                                })
             
             return {
-                'grid': grid,
-                'merged_cells': merged_cells,
-                'edges': {'horizontal': horizontals, 'vertical': verticals}
+                'texts': texts,
+                'edges': {'horizontal': horizontals, 'vertical': verticals},
+                'cells': cells
             }
             
     except Exception as e:
         st.error(f"レイアウト抽出中にエラーが発生しました: {str(e)}")
         return None
 
-def create_exact_excel_layout(layout_info, output_path):
-    """抽出したレイアウト情報を元にExcelファイルを作成"""
+def create_layout_excel(layout_info, output_path):
+    """レイアウト情報をExcelに出力"""
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
-        from openpyxl.utils import get_column_letter
+        from openpyxl.styles import Font, Alignment, Border, Side
         
         wb = Workbook()
         ws = wb.active
-        ws.title = "完全レイアウト"
         
-        # 基本の罫線スタイル
+        # 罫線スタイル
         thin_border = Border(
             left=Side(style='thin'),
             right=Side(style='thin'),
@@ -352,90 +244,69 @@ def create_exact_excel_layout(layout_info, output_path):
             bottom=Side(style='thin')
         )
         
-        # グリッドデータの配置
-        for i, row in enumerate(layout_info['grid']):
-            for j, cell in enumerate(row):
-                if not cell['merged']:
-                    excel_cell = ws.cell(row=i+1, column=j+1, value=cell['text'])
-                    
-                    # 数値の判定と右寄せ
-                    if cell['text'].replace(',', '').replace('¥', '').replace('(', '').replace(')', '').strip().isdigit():
-                        excel_cell.alignment = Alignment(horizontal='right', vertical='center')
-                    else:
-                        excel_cell.alignment = Alignment(horizontal='left', vertical='center')
-                    
-                    # 罫線の設定
-                    excel_cell.border = thin_border
+        # セルの配置
+        max_row = 0
+        max_col = 0
         
-        # セル結合の適用
-        for merged_cell in layout_info['merged_cells']:
-            try:
-                ws.merge_cells(
-                    start_row=merged_cell['start_row'] + 1,
-                    start_column=merged_cell['start_col'] + 1,
-                    end_row=merged_cell['end_row'],
-                    end_column=merged_cell['end_col']
-                )
-                
-                # 結合したセルのスタイル設定
-                cell = ws.cell(
-                    row=merged_cell['start_row'] + 1,
-                    column=merged_cell['start_col'] + 1,
-                    value=merged_cell['text']
-                )
-                cell.alignment = Alignment(horizontal='left', vertical='center')
-                cell.border = thin_border
-            except:
-                continue
+        for cell in layout_info['cells']:
+            row = cell['row'] + 1
+            col = cell['col'] + 1
+            max_row = max(max_row, row)
+            max_col = max(max_col, col)
+            
+            ws.cell(row=row, column=col, value=cell['text'])
+            
+            # スタイルの適用
+            current_cell = ws.cell(row=row, column=col)
+            current_cell.border = thin_border
+            
+            # 数値の場合は右寄せ
+            if str(cell['text']).replace(',', '').replace('¥', '').replace('(', '').replace(')', '').strip().isdigit():
+                current_cell.alignment = Alignment(horizontal='right', vertical='center')
+            else:
+                current_cell.alignment = Alignment(vertical='center')
         
-        # 列幅の自動調整
-        for col in ws.columns:
-            max_length = 0
-            column = get_column_letter(col[0].column)
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            adjusted_width = (max_length + 2) * 1.2
-            ws.column_dimensions[column].width = adjusted_width
+        # 列幅の調整
+        for col in range(1, max_col + 1):
+            ws.column_dimensions[get_column_letter(col)].width = 15
         
         # 行の高さを統一
-        for row in ws.rows:
-            ws.row_dimensions[row[0].row].height = 20
+        for row in range(1, max_row + 1):
+            ws.row_dimensions[row].height = 20
         
         wb.save(output_path)
         return True
         
     except Exception as e:
-        st.error(f"Excel作成中にエラーが発生しました: {str(e)}")
+        st.error(f"レイアウトExcel作成中にエラーが発生しました: {str(e)}")
         return False
 
 def process_pdf(uploaded_file):
     """PDFファイルを処理する"""
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            tmp_path = tmp_file.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
+            tmp_pdf.write(uploaded_file.getvalue())
+            pdf_path = tmp_pdf.name
             
-            # 既存の処理（カテゴリ分類）
-            document_structure = analyze_document_structure(tmp_path)
+            # 構造解析
+            doc_structure = analyze_document_structure(pdf_path)
+            # レイアウト解析
+            layout_info = extract_exact_layout(pdf_path)
             
-            # 完全なレイアウト抽出
-            layout_info = extract_exact_layout(tmp_path)
-            
-            # Excelファイルの作成
-            excel_path = tmp_path.replace('.pdf', '.xlsx')
-            
-            if document_structure and layout_info:
-                # 既存のシートを作成
-                create_excel_output(document_structure, excel_path)
+            if doc_structure or layout_info:
+                # 通常版Excel
+                normal_excel = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
+                normal_path = normal_excel.name
+                if doc_structure:
+                    create_excel_output(doc_structure['items'], normal_path)
                 
-                # 完全レイアウトシートを追加
-                create_exact_excel_layout(layout_info, excel_path.replace('.xlsx', '_exact.xlsx'))
+                # レイアウト版Excel
+                layout_excel = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
+                layout_path = layout_excel.name
+                if layout_info:
+                    create_layout_excel(layout_info, layout_path)
                 
-                return excel_path, excel_path.replace('.xlsx', '_exact.xlsx')
+                return normal_path, layout_path
             
             return None, None
             
@@ -443,8 +314,11 @@ def process_pdf(uploaded_file):
         st.error(f"ファイル処理中にエラーが発生しました: {str(e)}")
         return None, None
     finally:
-        if 'tmp_path' in locals():
-            os.unlink(tmp_path)
+        if 'pdf_path' in locals():
+            try:
+                os.unlink(pdf_path)
+            except:
+                pass
 
 def process_multiple_pdfs(uploaded_files):
     """複数のPDFファイルを処理する"""
@@ -612,70 +486,64 @@ def main():
     st.title("PDF to Excel 変換ツール")
     st.markdown("PDFファイルをExcel形式に変換できます。")
     
-    uploaded_files = st.file_uploader(
-        "PDFファイルを選択（複数可）", 
-        type=['pdf'],
-        accept_multiple_files=True
-    )
+    uploaded_file = st.file_uploader("PDFファイルを選択", type=['pdf'])
     
-    if uploaded_files:
+    if uploaded_file:
         with st.spinner('PDFを解析中...'):
-            categorized_data, layout_data = process_multiple_pdfs(uploaded_files)
+            normal_path, layout_path = process_pdf(uploaded_file)
             
-            if categorized_data and layout_data:
+            if normal_path or layout_path:
                 st.success("変換が完了しました！")
                 
-                # 一時ファイルを作成してプレビュー表示
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_categorized:
-                    tmp_categorized.write(categorized_data)
-                    tmp_categorized_path = tmp_categorized.name
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_layout:
-                    tmp_layout.write(layout_data)
-                    tmp_layout_path = tmp_layout.name
-                
-                try:
-                    # カテゴリ分類版のプレビュー
-                    st.subheader("📊 カテゴリ分類データ")
-                    excel_file = pd.ExcelFile(tmp_categorized_path)
-                    for sheet_name in excel_file.sheet_names:
-                        st.write(f"シート: {sheet_name}")
-                        df = pd.read_excel(excel_file, sheet_name=sheet_name)
-                        st.dataframe(df)
-                    
-                    # 完全レイアウト版のプレビュー
-                    st.subheader("📄 完全レイアウト")
-                    layout_excel = pd.ExcelFile(tmp_layout_path)
-                    for sheet_name in layout_excel.sheet_names:
-                        st.write(f"シート: {sheet_name}")
-                        df = pd.read_excel(layout_excel, sheet_name=sheet_name)
-                        st.dataframe(df)
-                
-                finally:
-                    # 一時ファイルの削除
+                # 通常版の表示
+                if normal_path and os.path.exists(normal_path):
+                    st.subheader("📊 通常データ")
                     try:
-                        os.unlink(tmp_categorized_path)
-                        os.unlink(tmp_layout_path)
-                    except:
-                        pass
+                        df = pd.read_excel(normal_path)
+                        st.dataframe(df)
+                    except Exception as e:
+                        st.error("通常データの表示中にエラーが発生しました")
+                
+                # レイアウト版の表示
+                if layout_path and os.path.exists(layout_path):
+                    st.subheader("📄 完全レイアウト")
+                    try:
+                        df = pd.read_excel(layout_path)
+                        st.dataframe(df)
+                    except Exception as e:
+                        st.error("レイアウトデータの表示中にエラーが発生しました")
                 
                 # ダウンロードボタン
                 col1, col2 = st.columns(2)
+                
                 with col1:
-                    st.download_button(
-                        label="📥 カテゴリ分類データをダウンロード",
-                        data=categorized_data,
-                        file_name='categorized_results.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    )
+                    if normal_path and os.path.exists(normal_path):
+                        with open(normal_path, 'rb') as f:
+                            st.download_button(
+                                label="📥 通常データをダウンロード",
+                                data=f,
+                                file_name=f'normal_{uploaded_file.name}.xlsx',
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
                 
                 with col2:
-                    st.download_button(
-                        label="📥 完全レイアウトをダウンロード",
-                        data=layout_data,
-                        file_name='layout_results.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    )
+                    if layout_path and os.path.exists(layout_path):
+                        with open(layout_path, 'rb') as f:
+                            st.download_button(
+                                label="📥 完全レイアウトをダウンロード",
+                                data=f,
+                                file_name=f'layout_{uploaded_file.name}.xlsx',
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
+                
+                # 一時ファイルの削除
+                try:
+                    if normal_path and os.path.exists(normal_path):
+                        os.unlink(normal_path)
+                    if layout_path and os.path.exists(layout_path):
+                        os.unlink(layout_path)
+                except:
+                    pass
 
 if __name__ == "__main__":
     main() 
