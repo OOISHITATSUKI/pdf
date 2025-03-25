@@ -448,45 +448,60 @@ def process_pdf(uploaded_file):
 
 def process_multiple_pdfs(uploaded_files):
     """複数のPDFファイルを処理する"""
+    temp_dir = tempfile.mkdtemp()  # 一時ディレクトリを作成
     try:
-        # 一時ファイル用のディレクトリを作成
-        with tempfile.TemporaryDirectory() as temp_dir:
-            all_results = []
+        all_results = []
+        
+        for uploaded_file in uploaded_files:
+            # 一時PDFファイルを作成
+            pdf_path = os.path.join(temp_dir, uploaded_file.name)
+            with open(pdf_path, 'wb') as f:
+                f.write(uploaded_file.getvalue())
             
-            for uploaded_file in uploaded_files:
-                # 一時PDFファイルを作成
-                pdf_path = os.path.join(temp_dir, uploaded_file.name)
-                with open(pdf_path, 'wb') as f:
-                    f.write(uploaded_file.getvalue())
-                
-                # PDFの処理
-                document_structure = analyze_document_structure(pdf_path)
-                layout_info = extract_exact_layout(pdf_path)
-                
-                if document_structure and layout_info:
-                    result = {
-                        'filename': uploaded_file.name,
-                        'document_structure': document_structure,
-                        'layout_info': layout_info
-                    }
-                    all_results.append(result)
+            # PDFの処理
+            document_structure = analyze_document_structure(pdf_path)
+            layout_info = extract_exact_layout(pdf_path)
             
-            if all_results:
-                # カテゴリ分類版Excelの作成
-                categorized_path = os.path.join(temp_dir, 'categorized_results.xlsx')
-                create_combined_excel(all_results, categorized_path)
-                
-                # 完全レイアウト版Excelの作成
-                layout_path = os.path.join(temp_dir, 'layout_results.xlsx')
-                create_combined_layout_excel(all_results, layout_path)
-                
-                return categorized_path, layout_path
+            if document_structure and layout_info:
+                result = {
+                    'filename': uploaded_file.name,
+                    'document_structure': document_structure,
+                    'layout_info': layout_info
+                }
+                all_results.append(result)
             
-            return None, None
+            # 一時PDFファイルを削除
+            os.remove(pdf_path)
+        
+        if all_results:
+            # カテゴリ分類版Excelの作成
+            categorized_path = os.path.join(temp_dir, 'categorized_results.xlsx')
+            create_combined_excel(all_results, categorized_path)
             
+            # 完全レイアウト版Excelの作成
+            layout_path = os.path.join(temp_dir, 'layout_results.xlsx')
+            create_combined_layout_excel(all_results, layout_path)
+            
+            # Excelファイルの内容を読み込む
+            with open(categorized_path, 'rb') as f:
+                categorized_data = f.read()
+            with open(layout_path, 'rb') as f:
+                layout_data = f.read()
+            
+            return categorized_data, layout_data
+        
+        return None, None
+        
     except Exception as e:
         st.error(f"ファイル処理中にエラーが発生しました: {str(e)}")
         return None, None
+    finally:
+        # 一時ディレクトリとファイルの削除
+        try:
+            import shutil
+            shutil.rmtree(temp_dir)
+        except:
+            pass
 
 def create_combined_excel(results, output_path):
     """複数のPDFの結果を1つのExcelファイルにまとめる"""
@@ -605,46 +620,62 @@ def main():
     
     if uploaded_files:
         with st.spinner('PDFを解析中...'):
-            categorized_path, layout_path = process_multiple_pdfs(uploaded_files)
+            categorized_data, layout_data = process_multiple_pdfs(uploaded_files)
             
-            if categorized_path and layout_path:
+            if categorized_data and layout_data:
                 st.success("変換が完了しました！")
                 
-                # カテゴリ分類版のプレビューと出力
-                st.subheader("📊 カテゴリ分類データ")
-                excel_file = pd.ExcelFile(categorized_path)
-                for sheet_name in excel_file.sheet_names:
-                    st.write(f"シート: {sheet_name}")
-                    df = pd.read_excel(excel_file, sheet_name=sheet_name)
-                    st.dataframe(df)
+                # 一時ファイルを作成してプレビュー表示
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_categorized:
+                    tmp_categorized.write(categorized_data)
+                    tmp_categorized_path = tmp_categorized.name
                 
-                # 完全レイアウト版のプレビューと出力
-                st.subheader("📄 完全レイアウト")
-                layout_excel = pd.ExcelFile(layout_path)
-                for sheet_name in layout_excel.sheet_names:
-                    st.write(f"シート: {sheet_name}")
-                    df = pd.read_excel(layout_excel, sheet_name=sheet_name)
-                    st.dataframe(df)
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_layout:
+                    tmp_layout.write(layout_data)
+                    tmp_layout_path = tmp_layout.name
+                
+                try:
+                    # カテゴリ分類版のプレビュー
+                    st.subheader("📊 カテゴリ分類データ")
+                    excel_file = pd.ExcelFile(tmp_categorized_path)
+                    for sheet_name in excel_file.sheet_names:
+                        st.write(f"シート: {sheet_name}")
+                        df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                        st.dataframe(df)
+                    
+                    # 完全レイアウト版のプレビュー
+                    st.subheader("📄 完全レイアウト")
+                    layout_excel = pd.ExcelFile(tmp_layout_path)
+                    for sheet_name in layout_excel.sheet_names:
+                        st.write(f"シート: {sheet_name}")
+                        df = pd.read_excel(layout_excel, sheet_name=sheet_name)
+                        st.dataframe(df)
+                
+                finally:
+                    # 一時ファイルの削除
+                    try:
+                        os.unlink(tmp_categorized_path)
+                        os.unlink(tmp_layout_path)
+                    except:
+                        pass
                 
                 # ダウンロードボタン
                 col1, col2 = st.columns(2)
                 with col1:
-                    with open(categorized_path, 'rb') as f:
-                        st.download_button(
-                            label="📥 カテゴリ分類データをダウンロード",
-                            data=f,
-                            file_name='categorized_results.xlsx',
-                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                        )
+                    st.download_button(
+                        label="📥 カテゴリ分類データをダウンロード",
+                        data=categorized_data,
+                        file_name='categorized_results.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
                 
                 with col2:
-                    with open(layout_path, 'rb') as f:
-                        st.download_button(
-                            label="📥 完全レイアウトをダウンロード",
-                            data=f,
-                            file_name='layout_results.xlsx',
-                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                        )
+                    st.download_button(
+                        label="📥 完全レイアウトをダウンロード",
+                        data=layout_data,
+                        file_name='layout_results.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
 
 if __name__ == "__main__":
     main() 
