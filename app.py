@@ -9,6 +9,7 @@ import hashlib
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
+import sqlite3
 
 # Stripe設定（実際の値に置き換えが必要）
 stripe.api_key = st.secrets["stripe"]["api_key"]
@@ -34,6 +35,70 @@ if 'user_state' not in st.session_state:
 # ユーザーデータベース（実際の実装ではデータベースを使用）
 if 'users' not in st.session_state:
     st.session_state.users = {}
+
+# データベース初期化
+def init_db():
+    conn = sqlite3.connect('user_data.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            is_premium BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            subscription_end_date TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# パスワードのハッシュ化
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# ユーザー登録
+def register_user(email, password):
+    try:
+        conn = sqlite3.connect('user_data.db')
+        c = conn.cursor()
+        
+        # メールアドレスの重複チェック
+        c.execute('SELECT * FROM users WHERE email = ?', (email,))
+        if c.fetchone() is not None:
+            conn.close()
+            return False, "このメールアドレスは既に登録されています"
+        
+        # 新規ユーザーの登録
+        hashed_password = hash_password(password)
+        c.execute('INSERT INTO users (email, password) VALUES (?, ?)',
+                 (email, hashed_password))
+        conn.commit()
+        conn.close()
+        return True, "登録が完了しました"
+    except Exception as e:
+        return False, f"登録中にエラーが発生しました: {str(e)}"
+
+# ログイン認証
+def login_user(email, password):
+    try:
+        conn = sqlite3.connect('user_data.db')
+        c = conn.cursor()
+        
+        # ユーザー検索
+        c.execute('SELECT * FROM users WHERE email = ? AND password = ?',
+                 (email, hash_password(password)))
+        user = c.fetchone()
+        conn.close()
+        
+        if user is not None:
+            return True, "ログインしました"
+        else:
+            return False, "メールアドレスまたはパスワードが正しくありません"
+    except Exception as e:
+        return False, f"ログイン中にエラーが発生しました: {str(e)}"
+
+# データベースの初期化
+init_db()
 
 def create_checkout_session(email):
     """Stripe決済セッションの作成"""
@@ -78,26 +143,58 @@ def store_conversion(pdf_file, excel_file):
         
         st.session_state.user_state['stored_files'].append(file_info)
 
-# UI部分
+# 認証UI
 def show_auth_ui():
-    """認証UI"""
-    st.sidebar.markdown("### アカウント")
+    st.sidebar.markdown("### アカウント管理")
     
     if not st.session_state.user_state['is_logged_in']:
-        with st.sidebar.form("auth_form"):
-            email = st.text_input("メールアドレス")
-            password = st.text_input("パスワード", type="password")
-            submit = st.form_submit_button("ログイン/登録")
-            
-            if submit and email and password:
-                # 実際の実装ではデータベースでの認証が必要
-                st.session_state.user_state['is_logged_in'] = True
-                st.session_state.user_state['email'] = email
-                st.experimental_rerun()
+        tab1, tab2 = st.sidebar.tabs(["ログイン", "新規登録"])
+        
+        with tab1:
+            with st.form("login_form"):
+                login_email = st.text_input("メールアドレス", key="login_email")
+                login_password = st.text_input("パスワード", type="password", key="login_password")
+                login_submit = st.form_submit_button("ログイン")
+                
+                if login_submit:
+                    success, message = login_user(login_email, login_password)
+                    if success:
+                        st.session_state.user_state['is_logged_in'] = True
+                        st.session_state.user_state['email'] = login_email
+                        st.success(message)
+                        st.experimental_rerun()
+                    else:
+                        st.error(message)
+        
+        with tab2:
+            with st.form("register_form"):
+                reg_email = st.text_input("メールアドレス", key="reg_email")
+                reg_password = st.text_input("パスワード", type="password", key="reg_password")
+                reg_password_confirm = st.text_input("パスワード（確認）", type="password")
+                register_submit = st.form_submit_button("新規登録")
+                
+                if register_submit:
+                    if reg_password != reg_password_confirm:
+                        st.error("パスワードが一致しません")
+                    else:
+                        success, message = register_user(reg_email, reg_password)
+                        if success:
+                            st.success(message)
+                            # 自動ログイン
+                            st.session_state.user_state['is_logged_in'] = True
+                            st.session_state.user_state['email'] = reg_email
+                            st.experimental_rerun()
+                        else:
+                            st.error(message)
+    
     else:
+        st.sidebar.markdown(f"### ようこそ！")
         st.sidebar.markdown(f"ログイン中: {st.session_state.user_state['email']}")
+        
         if not st.session_state.user_state['is_premium']:
-            if st.sidebar.button("🌟 プレミアムに登録"):
+            st.sidebar.markdown("### 🌟 プレミアムにアップグレード")
+            if st.sidebar.button("プレミアム会員に登録"):
+                # Stripe決済ページへのリンク
                 checkout_url = create_checkout_session(st.session_state.user_state['email'])
                 if checkout_url:
                     st.markdown(f"[決済ページへ進む]({checkout_url})")
