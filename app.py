@@ -42,35 +42,57 @@ class ConversionHistory:
 
 def init_db():
     """データベースの初期化"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # ユーザーテーブル
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            email TEXT UNIQUE,
-            plan_type TEXT DEFAULT 'free',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # 変換履歴テーブル
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS conversion_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            document_type TEXT,
-            document_date TEXT,
-            conversion_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            file_name TEXT,
-            status TEXT,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # ユーザーテーブル
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE,
+                plan_type TEXT DEFAULT 'free',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # 変換履歴テーブル
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS conversion_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                document_type TEXT,
+                document_date TEXT,
+                conversion_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                file_name TEXT,
+                status TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # 変換カウントテーブル
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS conversion_count (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                count_date TEXT,
+                count INTEGER DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                UNIQUE(user_id, count_date)
+            )
+        ''')
+        
+        # 初期ユーザーの作成（セッションユーザー用）
+        c.execute('''
+            INSERT OR IGNORE INTO users (id, plan_type)
+            VALUES (?, 'free')
+        ''', (str(datetime.now().timestamp()),))
+        
+        conn.commit()
+    except Exception as e:
+        st.error(f"データベースの初期化中にエラーが発生しました: {str(e)}")
+    finally:
+        conn.close()
 
 def save_conversion_history(user_id: str, document_type: str, document_date: str, file_name: str, status: str):
     """変換履歴を保存"""
@@ -86,16 +108,58 @@ def save_conversion_history(user_id: str, document_type: str, document_date: str
 
 def get_daily_conversion_count(user_id: str) -> int:
     """ユーザーの本日の変換回数を取得"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    today = datetime.now().strftime('%Y-%m-%d')
-    c.execute('''
-        SELECT COUNT(*) FROM conversion_history
-        WHERE user_id = ? AND date(conversion_date) = ?
-    ''', (user_id, today))
-    count = c.fetchone()[0]
-    conn.close()
-    return count
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        today = datetime.now().strftime('%Y-%m-%d')
+        
+        # ユーザーと日付の組み合わせがなければ作成
+        c.execute('''
+            INSERT OR IGNORE INTO conversion_count (user_id, count_date, count)
+            VALUES (?, ?, 0)
+        ''', (user_id, today))
+        
+        # カウントを取得
+        c.execute('''
+            SELECT count FROM conversion_count
+            WHERE user_id = ? AND count_date = ?
+        ''', (user_id, today))
+        
+        result = c.fetchone()
+        conn.commit()
+        return result[0] if result else 0
+    except Exception as e:
+        st.error(f"変換回数の取得中にエラーが発生しました: {str(e)}")
+        return 0
+    finally:
+        conn.close()
+
+def increment_conversion_count(user_id: str) -> bool:
+    """変換回数をインクリメント"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        today = datetime.now().strftime('%Y-%m-%d')
+        
+        c.execute('''
+            UPDATE conversion_count
+            SET count = count + 1
+            WHERE user_id = ? AND count_date = ?
+        ''', (user_id, today))
+        
+        if c.rowcount == 0:
+            c.execute('''
+                INSERT INTO conversion_count (user_id, count_date, count)
+                VALUES (?, ?, 1)
+            ''', (user_id, today))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"変換回数の更新中にエラーが発生しました: {str(e)}")
+        return False
+    finally:
+        conn.close()
 
 def check_conversion_limit(user_id: str) -> bool:
     """変換制限をチェック"""
@@ -120,7 +184,10 @@ def check_conversion_limit(user_id: str) -> bool:
 
 # セッション状態の初期化
 if 'user_id' not in st.session_state:
-    st.session_state.user_id = str(datetime.now().timestamp())  # 仮のユーザーID
+    st.session_state.user_id = str(datetime.now().timestamp())
+
+# データベースの初期化を実行
+init_db()
 
 def create_hero_section():
     """ヒーローセクションを作成"""
