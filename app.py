@@ -362,32 +362,177 @@ def create_layout_excel(layout_info, output_path):
         st.error(f"レイアウトExcel作成中にエラーが発生しました: {str(e)}")
         return False
 
+def is_tax_return_pdf(pdf_path):
+    """確定申告書かどうかを判定"""
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            page = pdf.pages[0]
+            text = page.extract_text()
+            # 確定申告書に特有の文字列をチェック
+            tax_keywords = ['確定申告書', '所得税', '法人税', '消費税', '源泉所得税']
+            return any(keyword in text for keyword in tax_keywords)
+    except:
+        return False
+
+def process_tax_return_pdf(page):
+    """確定申告書専用の処理"""
+    try:
+        # 文字情報を直接取得
+        chars = page.chars
+        
+        # 文字情報を位置情報でソート
+        sorted_chars = sorted(chars, key=lambda x: (x['top'], x['x0']))
+        
+        # 行ごとにグループ化（y座標が近いものをグループ化）
+        y_tolerance = 3
+        lines = []
+        current_line = []
+        current_y = None
+        
+        for char in sorted_chars:
+            if current_y is None:
+                current_y = char['top']
+                current_line.append(char)
+            elif abs(char['top'] - current_y) <= y_tolerance:
+                current_line.append(char)
+            else:
+                if current_line:
+                    lines.append(sorted(current_line, key=lambda x: x['x0']))
+                current_line = [char]
+                current_y = char['top']
+        
+        if current_line:
+            lines.append(sorted(current_line, key=lambda x: x['x0']))
+        
+        # 各行の文字を結合
+        processed_lines = []
+        for line in lines:
+            # 数値とテキストを区別して処理
+            text_parts = []
+            current_text = ''
+            current_x = None
+            
+            for char in line:
+                if current_x is None:
+                    current_text = char['text']
+                    current_x = char['x0']
+                elif abs(char['x0'] - (current_x + char['width'])) <= 3:
+                    current_text += char['text']
+                else:
+                    if current_text:
+                        text_parts.append(current_text)
+                    current_text = char['text']
+                current_x = char['x0']
+            
+            if current_text:
+                text_parts.append(current_text)
+            
+            # 数値の場合は桁区切りを追加
+            processed_text = ''
+            for part in text_parts:
+                if part.isdigit():
+                    processed_text += f'{int(part):,}'
+                else:
+                    processed_text += part
+                processed_text += ' '
+            
+            if processed_text.strip():
+                processed_lines.append(processed_text.strip())
+        
+        return processed_lines
+    except Exception as e:
+        st.error(f"確定申告書の処理中にエラーが発生しました: {str(e)}")
+        return []
+
+def create_tax_return_excel(lines, output_path):
+    """確定申告書用のExcel作成"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "確定申告書"
+        
+        # 罫線スタイル
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # データの配置
+        for i, line in enumerate(lines, 1):
+            # 行の内容を解析
+            parts = line.split()
+            for j, part in enumerate(parts, 1):
+                cell = ws.cell(row=i, column=j, value=part)
+                
+                # スタイルの設定
+                cell.border = thin_border
+                
+                # 数値の場合は右寄せ
+                if part.replace(',', '').isdigit():
+                    cell.alignment = Alignment(horizontal='right')
+                else:
+                    cell.alignment = Alignment(horizontal='left')
+        
+        # 列幅の調整
+        for col in ws.columns:
+            max_length = 0
+            column = get_column_letter(col[0].column)
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2) * 1.2
+            ws.column_dimensions[column].width = adjusted_width
+        
+        wb.save(output_path)
+        return True
+    except Exception as e:
+        st.error(f"確定申告書のExcel作成中にエラーが発生しました: {str(e)}")
+        return False
+
 def process_pdf(uploaded_file):
     """PDFファイルを処理する"""
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
-            tmp_pdf.write(uploaded_file.getvalue())
-            pdf_path = tmp_pdf.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            pdf_path = tmp_file.name
             
-            # 構造解析
-            doc_structure = analyze_document_structure(pdf_path)
-            # レイアウト解析
-            layout_info = extract_exact_layout(pdf_path)
+            # 確定申告書かどうかを判定
+            is_tax_return = is_tax_return_pdf(pdf_path)
             
-            if doc_structure or layout_info:
-                # 通常版Excel
-                normal_excel = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
-                normal_path = normal_excel.name
-                if doc_structure:
-                    create_excel_output(doc_structure['items'], normal_path)
+            with pdfplumber.open(pdf_path) as pdf:
+                page = pdf.pages[0]
                 
-                # レイアウト版Excel
-                layout_excel = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
-                layout_path = layout_excel.name
-                if layout_info:
-                    create_layout_excel(layout_info, layout_path)
-                
-                return normal_path, layout_path
+                if is_tax_return:
+                    # 確定申告書用の処理
+                    lines = process_tax_return_pdf(page)
+                    
+                    if lines:
+                        tax_return_path = pdf_path.replace('.pdf', '_tax_return.xlsx')
+                        if create_tax_return_excel(lines, tax_return_path):
+                            return tax_return_path, None
+                else:
+                    # 通常のPDF処理
+                    normal_path = pdf_path.replace('.pdf', '_normal.xlsx')
+                    layout_path = pdf_path.replace('.pdf', '_layout.xlsx')
+                    
+                    document_structure = analyze_document_structure(pdf_path)
+                    layout_info = extract_exact_layout(pdf_path)
+                    
+                    if document_structure:
+                        create_excel_output(document_structure['items'], normal_path)
+                    if layout_info:
+                        create_layout_excel(layout_info, layout_path)
+                    
+                    return normal_path, layout_path
             
             return None, None
             
@@ -571,62 +716,65 @@ def main():
     
     if uploaded_file:
         with st.spinner('PDFを解析中...'):
-            normal_path, layout_path = process_pdf(uploaded_file)
+            path1, path2 = process_pdf(uploaded_file)
             
-            if normal_path or layout_path:
+            if path1:
                 st.success("変換が完了しました！")
                 
-                # 通常版の表示
-                if normal_path and os.path.exists(normal_path):
-                    st.subheader("📊 通常データ")
-                    try:
-                        df = pd.read_excel(normal_path)
-                        st.dataframe(df)
-                    except Exception as e:
-                        st.error(f"通常データの表示中にエラーが発生しました: {str(e)}")
-                
-                # レイアウト版の表示
-                if layout_path and os.path.exists(layout_path):
-                    st.subheader("📄 完全レイアウト")
-                    try:
-                        df = pd.read_excel(layout_path)
-                        st.dataframe(df)
-                    except Exception as e:
-                        st.error(f"レイアウトデータの表示中にエラーが発生しました: {str(e)}")
-                
-                # ダウンロードボタン
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if normal_path and os.path.exists(normal_path):
-                        with open(normal_path, 'rb') as f:
-                            normal_data = f.read()
-                            st.download_button(
-                                label="📥 通常データをダウンロード",
-                                data=normal_data,
-                                file_name=f'normal_{uploaded_file.name}.xlsx',
-                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                            )
-                
-                with col2:
-                    if layout_path and os.path.exists(layout_path):
-                        with open(layout_path, 'rb') as f:
-                            layout_data = f.read()
-                            st.download_button(
-                                label="📥 完全レイアウトをダウンロード",
-                                data=layout_data,
-                                file_name=f'layout_{uploaded_file.name}.xlsx',
-                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                            )
-                
-                # 一時ファイルの削除
                 try:
-                    if normal_path and os.path.exists(normal_path):
-                        os.unlink(normal_path)
-                    if layout_path and os.path.exists(layout_path):
-                        os.unlink(layout_path)
-                except:
-                    pass
+                    # 確定申告書の場合
+                    if 'tax_return' in path1:
+                        st.subheader("📊 確定申告書データ")
+                        df = pd.read_excel(path1)
+                        st.dataframe(df)
+                        
+                        with open(path1, 'rb') as f:
+                            st.download_button(
+                                label="📥 確定申告書データをダウンロード",
+                                data=f,
+                                file_name=f'tax_return_{uploaded_file.name}.xlsx',
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            )
+                    # 通常のPDFの場合
+                    else:
+                        st.subheader("📊 通常データ")
+                        df1 = pd.read_excel(path1)
+                        st.dataframe(df1)
+                        
+                        if path2:
+                            st.subheader("📄 完全レイアウト")
+                            df2 = pd.read_excel(path2)
+                            st.dataframe(df2)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            with open(path1, 'rb') as f:
+                                st.download_button(
+                                    label="📥 通常データをダウンロード",
+                                    data=f,
+                                    file_name=f'normal_{uploaded_file.name}.xlsx',
+                                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                                )
+                        
+                        if path2:
+                            with col2:
+                                with open(path2, 'rb') as f:
+                                    st.download_button(
+                                        label="📥 完全レイアウトをダウンロード",
+                                        data=f,
+                                        file_name=f'layout_{uploaded_file.name}.xlsx',
+                                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                                    )
+                
+                finally:
+                    # 一時ファイルの削除
+                    try:
+                        if os.path.exists(path1):
+                            os.unlink(path1)
+                        if path2 and os.path.exists(path2):
+                            os.unlink(path2)
+                    except:
+                        pass
 
 if __name__ == "__main__":
     main() 
