@@ -22,6 +22,14 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Set
 from openpyxl.cell.cell import MergedCell
 import hashlib
+from google.cloud import vision
+from dotenv import load_dotenv
+
+# 環境変数の読み込み
+load_dotenv()
+
+# Google Cloud Vision APIの初期化
+vision_client = vision.ImageAnnotatorClient()
 
 # ページ設定（必ず最初に実行）
 st.set_page_config(
@@ -282,31 +290,16 @@ def get_daily_conversion_count(user_id: str) -> int:
         conn.close()
 
 def increment_conversion_count(user_id: str) -> bool:
-    """変換回数をインクリメント"""
+    """変換回数のインクリメント（バックエンド側）"""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        today = datetime.now().strftime('%Y-%m-%d')
-        
-        c.execute('''
-            UPDATE conversion_count
-            SET count = count + 1
-            WHERE user_id = ? AND count_date = ?
-        ''', (user_id, today))
-        
-        if c.rowcount == 0:
-            c.execute('''
-                INSERT INTO conversion_count (user_id, count_date, count)
-                VALUES (?, ?, 1)
-            ''', (user_id, today))
-        
-        conn.commit()
-        return True
+        # 再度制限チェック
+        if not check_conversion_limit(user_id):
+            return False
+            
+        return tracker.increment_count(user_id)
     except Exception as e:
         st.error(f"変換回数の更新中にエラーが発生しました: {str(e)}")
         return False
-    finally:
-        conn.close()
 
 def check_conversion_limit(user_id: Optional[str] = None) -> bool:
     """変換制限のチェック（バックエンド側）"""
@@ -458,6 +451,22 @@ def get_conversion_limit(user_id=None):
     plan = get_user_plan(user_id)
     return get_plan_limits(plan)
 
+def process_pdf_with_ocr(image_bytes, document_type):
+    """Google Cloud Vision APIを使用してOCR処理を実行"""
+    try:
+        image = vision.Image(content=image_bytes)
+        response = vision_client.text_detection(image=image)
+        texts = response.text_annotations
+
+        if not texts:
+            return None
+
+        # テキストを整形して返す
+        return texts[0].description
+    except Exception as e:
+        st.error(f"OCR処理中にエラーが発生しました: {str(e)}")
+        return None
+
 def process_pdf(uploaded_file, document_type=None, document_date=None):
     """PDFを処理してExcelに変換する関数"""
     try:
@@ -467,146 +476,78 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
             st.error("本日の変換回数制限に達しました。プランをアップグレードするか、明日以降に再度お試しください。")
             return None
 
-        # 変換処理の実行
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
-            temp_pdf.write(uploaded_file.getvalue())
-            pdf_path = temp_pdf.name
+        # PDFを画像に変換
+        pdf_bytes = uploaded_file.getvalue()
+        images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1)
+        
+        if not images:
+            st.error("PDFの読み込みに失敗しました。")
+            return None
 
-        with pdfplumber.open(pdf_path) as pdf:
-            # 1ページ目のみ処理（無料プラン）
-            page = pdf.pages[0]
-            
-            # テーブルとテキストの抽出
-            tables = page.extract_tables()
-            texts = page.extract_text().split('\n')
-            
-            if not tables:
-                raise ValueError("テーブルが見つかりませんでした")
+        # 画像をバイトデータに変換
+        img_byte_arr = io.BytesIO()
+        images[0].save(img_byte_arr, format='PNG')
+        img_bytes = img_byte_arr.getvalue()
 
-            # Excelファイルの作成
-            wb = Workbook()
-            ws = wb.active
-            
-            # シート名の設定
-            sheet_name = f"{get_document_type_label(document_type)}_{document_date.strftime('%Y-%m-%d') if document_date else 'unknown_date'}"
-            ws.title = sheet_name[:31]  # Excelのシート名制限（31文字）に対応
-            
-            # スタイルの定義
-            header_font = Font(bold=True, size=12)
-            normal_font = Font(size=11)
-            header_fill = PatternFill(start_color="E3F2FD", end_color="E3F2FD", fill_type="solid")
-            thin_border = Border(
-                left=Side(style='thin'),
-                right=Side(style='thin'),
-                top=Side(style='thin'),
-                bottom=Side(style='thin')
-            )
-            thick_border = Border(
-                left=Side(style='medium'),
-                right=Side(style='medium'),
-                top=Side(style='medium'),
-                bottom=Side(style='medium')
-            )
-            
-            # ドキュメント情報の挿入
-            ws.merge_cells('A1:E1')
-            doc_info = ws['A1']
-            doc_info.value = f"※このファイルは{get_document_type_label(document_type)}です（発行日：{document_date.strftime('%Y年%m月%d日') if document_date else '日付不明'}）"
-            doc_info.font = Font(size=12, color="666666")
-            doc_info.alignment = Alignment(horizontal='left')
-            
-            # ヘッダー情報の抽出と挿入（宛名、発行者情報など）
-            current_row = 3
-            for text in texts[:5]:  # 最初の数行を確認
-                if any(keyword in text for keyword in ['株式会社', '御中', '様']):
-                    ws.merge_cells(f'A{current_row}:E{current_row}')
-                    cell = ws[f'A{current_row}']
-                    cell.value = text
-                    cell.font = Font(size=12, bold=True)
-                    cell.alignment = Alignment(horizontal='left')
-                    current_row += 1
-            
-            # テーブルデータの書き込み開始行
-            start_row = current_row + 1
-            
-            # テーブルヘッダーの書き込み
-            for j, cell in enumerate(tables[0][0], 1):
-                if cell is not None:
-                    ws_cell = ws.cell(row=start_row, column=j, value=str(cell).strip())
-                    ws_cell.font = header_font
-                    ws_cell.fill = header_fill
-                    ws_cell.border = thick_border
-                    ws_cell.alignment = Alignment(horizontal='center', vertical='center')
-            
-            # テーブルデータの書き込み
-            for i, row in enumerate(tables[0][1:], start_row + 1):
-                for j, cell in enumerate(row, 1):
-                    if cell is not None:
-                        cell_value = str(cell).strip()
-                        ws_cell = ws.cell(row=i, column=j, value=cell_value)
-                        ws_cell.font = normal_font
-                        ws_cell.border = thin_border
-                        # 数値の場合は右寄せ
-                        if cell_value.replace(',', '').replace('.', '').isdigit():
-                            ws_cell.alignment = Alignment(horizontal='right')
-                            ws_cell.number_format = '#,##0'
-            
-            # 合計金額部分の処理
-            total_row = len(tables[0]) + start_row + 1
-            for text in texts:
-                if any(keyword in text for keyword in ['合計', '総額', '税込', '消費税']):
-                    ws.merge_cells(f'A{total_row}:C{total_row}')
-                    label_cell = ws[f'A{total_row}']
-                    value_cell = ws[f'D{total_row}']
-                    
-                    label_cell.value = text.split(':')[0] if ':' in text else text
-                    value_cell.value = text.split(':')[1] if ':' in text else ''
-                    
-                    label_cell.font = Font(bold=True, size=12)
-                    value_cell.font = Font(bold=True, size=12)
-                    value_cell.alignment = Alignment(horizontal='right')
-                    value_cell.number_format = '#,##0'
-                    
-                    total_row += 1
-            
-            # 列幅の自動調整
-            for column_cells in ws.columns:
-                max_length = 0
-                column = column_cells[0].column  # 列番号を取得
-                
-                # 結合セルを考慮して最大長を計算
-                for cell in column_cells:
-                    if cell.value:
-                        try:
-                            # 結合セルの場合は、元のセルの値を使用
-                            if isinstance(cell, MergedCell):
-                                continue
+        # ユーザープランに応じてOCR処理を選択
+        user_plan = get_user_plan(user_id)
+        if user_plan in ['premium_basic', 'premium_pro']:
+            # 有料ユーザーはGoogle Cloud Vision APIを使用
+            text_content = process_pdf_with_ocr(img_bytes, document_type)
+        else:
+            # 無料ユーザーはpdfplumberを使用
+            with pdfplumber.open(uploaded_file) as pdf:
+                page = pdf.pages[0]
+                text_content = page.extract_text()
+
+        if not text_content:
+            st.error("このPDFは読み取れませんでした。画像のみのPDFや、スキャンされたPDFの場合は有料プランでのOCR処理をお試しください。")
+            return None
+
+        # Excelファイルの作成
+        wb = Workbook()
+        ws = wb.active
+
+        # シート名の設定
+        sheet_name = f"{get_document_type_label(document_type)}_{document_date.strftime('%Y-%m-%d') if document_date else 'unknown_date'}"
+        ws.title = sheet_name[:31]
+
+        # テキストをExcelに書き込み
+        for i, line in enumerate(text_content.split('\n'), 1):
+            ws.cell(row=i, column=1, value=line)
+
+        # 列幅の自動調整
+        for column_cells in ws.columns:
+            max_length = 0
+            column = column_cells[0].column
+            for cell in column_cells:
+                if cell.value:
+                    try:
+                        if not isinstance(cell, MergedCell):
                             length = len(str(cell.value))
                             max_length = max(max_length, length)
-                        except:
-                            pass
-                
-                # 列幅を設定（最小幅を確保）
-                adjusted_width = max(max_length + 2, 8) * 1.2
-                ws.column_dimensions[get_column_letter(column)].width = adjusted_width
+                    except:
+                        pass
+            adjusted_width = max(max_length + 2, 8) * 1.2
+            ws.column_dimensions[get_column_letter(column)].width = adjusted_width
 
-            # 一時ファイルとして保存
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
-                wb.save(temp_excel.name)
-                with open(temp_excel.name, 'rb') as f:
-                    excel_data = f.read()
+        # 一時ファイルとして保存
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
+            wb.save(temp_excel.name)
+            with open(temp_excel.name, 'rb') as f:
+                excel_data = f.read()
 
-            # 一時ファイルの削除
-            os.unlink(pdf_path)
-            os.unlink(temp_excel.name)
+        # 一時ファイルの削除
+        os.unlink(temp_excel.name)
 
-            # 変換成功時にカウントをインクリメント
-            if increment_conversion_count(user_id):
-                st.success("変換が完了しました！")
-            else:
-                st.error("変換回数の更新に失敗しました。")
+        # 変換成功時にカウントをインクリメント
+        if increment_conversion_count(user_id):
+            st.success("変換が完了しました！")
+            st.experimental_rerun()  # 画面を更新
+        else:
+            st.error("変換回数の更新に失敗しました。")
 
-            return excel_data
+        return excel_data
 
     except Exception as e:
         st.error(f"PDFの処理中にエラーが発生しました: {str(e)}")
