@@ -3,9 +3,16 @@ import pdfplumber
 import pandas as pd
 import tempfile
 import os
-import time
 from datetime import datetime, timedelta
+import stripe
 import hashlib
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+
+# Stripe設定（実際の値に置き換えが必要）
+stripe.api_key = st.secrets["stripe"]["api_key"]
+PRICE_ID = st.secrets["stripe"]["price_id"]
 
 # ページ設定
 st.set_page_config(
@@ -17,245 +24,109 @@ st.set_page_config(
 # セッション状態の初期化
 if 'user_state' not in st.session_state:
     st.session_state.user_state = {
-        'is_logged_in': False,        # ログイン状態
-        'is_premium': False,          # 有料会員状態
-        'daily_conversions': 0,       # 今日の変換回数
-        'last_conversion_date': None, # 最後の変換日
-        'email': None
+        'is_logged_in': False,
+        'is_premium': False,
+        'email': None,
+        'stored_files': [],
+        'conversion_count': 0
     }
 
-# ユーザーデータベースの初期化（実際の実装ではデータベースを使用）
+# ユーザーデータベース（実際の実装ではデータベースを使用）
 if 'users' not in st.session_state:
     st.session_state.users = {}
 
-def hash_password(password):
-    """パスワードをハッシュ化"""
-    return hashlib.sha256(password.encode()).hexdigest()
+def create_checkout_session(email):
+    """Stripe決済セッションの作成"""
+    try:
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price': PRICE_ID,
+                'quantity': 1,
+            }],
+            mode='subscription',
+            success_url=YOUR_DOMAIN + '/success',
+            cancel_url=YOUR_DOMAIN + '/cancel',
+            customer_email=email,
+        )
+        return checkout_session.url
+    except Exception as e:
+        st.error(f"決済セッションの作成に失敗しました: {str(e)}")
+        return None
 
-def register_user(email, password):
-    """ユーザー登録"""
-    if email in st.session_state.users:
-        return False, "このメールアドレスは既に登録されています"
-    
-    st.session_state.users[email] = {
-        'password': hash_password(password),
-        'is_premium': False,
-        'daily_conversions': 0,
-        'last_conversion_date': None
-    }
-    return True, "登録が完了しました"
+def send_excel_email(email, excel_file):
+    """メールでExcelファイルを送信"""
+    if st.session_state.user_state['is_premium']:
+        try:
+            # メール送信のロジック（SMTPサーバーの設定が必要）
+            pass
+        except Exception as e:
+            st.error(f"メール送信に失敗しました: {str(e)}")
 
-def login_user(email, password):
-    """ユーザーログイン"""
-    if email not in st.session_state.users:
-        return False, "メールアドレスが見つかりません"
-    
-    if st.session_state.users[email]['password'] != hash_password(password):
-        return False, "パスワードが正しくありません"
-    
-    st.session_state.user_state['is_logged_in'] = True
-    st.session_state.user_state['email'] = email
-    st.session_state.user_state['is_premium'] = st.session_state.users[email]['is_premium']
-    return True, "ログインしました"
-
-def check_conversion_limit():
-    """ユーザーの変換制限をチェックする関数"""
-    # 未ログインまたは無料会員の場合のみ制限をチェック
-    if not st.session_state.user_state['is_premium']:
-        current_date = datetime.now().date()
-        last_date = st.session_state.user_state['last_conversion_date']
-
-        # 日付が変わった場合、カウントをリセット
-        if last_date != current_date:
-            st.session_state.user_state['daily_conversions'] = 0
-            st.session_state.user_state['last_conversion_date'] = current_date
-
-        # 制限チェック
-        if st.session_state.user_state['daily_conversions'] >= 3:
-            return False
-    return True
-
-def increment_conversion_count():
-    """変換回数をカウントアップする関数"""
-    if not st.session_state.user_state['is_premium']:
-        st.session_state.user_state['daily_conversions'] += 1
-        st.session_state.user_state['last_conversion_date'] = datetime.now().date()
-
-# カスタムCSSの追加
-st.markdown("""
-<style>
-    /* 全体の背景にグラデーション */
-    .stApp {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-    }
-    
-    /* ヘッダー部分のスタイル */
-    .header-container {
-        background: white;
-        padding: 2rem;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        margin-bottom: 2rem;
-    }
-    
-    /* ログインボタンのスタイル */
-    .stButton>button {
-        background: linear-gradient(45deg, #2196F3, #21CBF3);
-        color: white;
-        border: none;
-        padding: 0.5rem 1rem;
-        border-radius: 25px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        transition: all 0.3s ease;
-    }
-    
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-    }
-    
-    /* アップロードエリアのスタイル */
-    .uploadfile {
-        background: white;
-        border-radius: 15px;
-        padding: 2rem;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    
-    /* プレミアムバッジのスタイル */
-    .premium-badge {
-        background: linear-gradient(45deg, #FFD700, #FFA500);
-        color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 25px;
-        text-align: center;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-    }
-    
-    /* 無料バッジのスタイル */
-    .free-badge {
-        background: linear-gradient(45deg, #e0e0e0, #b0b0b0);
-        color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 25px;
-        text-align: center;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ユーザー状態を表示する関数
-def show_user_status():
-    if st.session_state.user_state['is_logged_in']:
-        if st.session_state.user_state['is_premium']:
-            status_html = """
-            <div class="header-container">
-                <div class="user-info">
-                    <span class="premium-badge">🌟 プレミアム会員</span>
-                </div>
-            </div>
-            """
-        else:
-            remaining = 3 - st.session_state.user_state['daily_conversions']
-            status_html = f"""
-            <div class="header-container">
-                <div class="user-info">
-                    <span class="free-badge">無料会員</span>
-                    <span class="remaining-count">残り {remaining}回</span>
-                    <a href="#" class="upgrade-button">🌟 プレミアムに変更</a>
-                </div>
-            </div>
-            """
-    else:
-        status_html = """
-        <div class="header-container">
-            <div class="user-info">
-                <a href="#" class="login-button">ログイン</a>
-                <a href="#" class="login-button">新規登録</a>
-            </div>
-        </div>
-        """
-    
-    st.markdown(status_html, unsafe_allow_html=True)
-
-# ユーザー状態の表示
-show_user_status()
-
-# メインコンテンツ
-st.markdown('<div class="main-content">', unsafe_allow_html=True)
-
-# 2列レイアウトでヘッダーを作成
-header_left, header_right = st.columns([3, 1])
-
-with header_left:
-    st.markdown("""
-    <div class="header-container">
-        <h1>PDF to Excel 変換ツール</h1>
-        <p>PDFファイルをExcel形式に変換できます。すべての処理はブラウザ内で行われます。</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-with header_right:
-    if not st.session_state.user_state['is_logged_in']:
-        if st.button("ログイン / 新規登録"):
-            st.session_state['show_auth'] = True
-    else:
-        if st.session_state.user_state['is_premium']:
-            st.markdown("""
-                <div class="premium-badge">
-                    🌟 プレミアム会員
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            remaining = 3 - st.session_state.user_state['daily_conversions']
-            st.markdown(f"""
-                <div class="free-badge">
-                    無料会員 (残り {remaining}回)
-                </div>
-                """, unsafe_allow_html=True)
-            st.button("🌟 プレミアムに変更")
-
-# 認証フォーム
-if st.session_state.get('show_auth', False) and not st.session_state.user_state['is_logged_in']:
-    with st.form("auth_form"):
-        auth_type = st.radio("", ["ログイン", "新規登録"])
-        email = st.text_input("メールアドレス")
-        password = st.text_input("パスワード", type="password")
+def store_conversion(pdf_file, excel_file):
+    """変換ファイルの保存（30日間）"""
+    if st.session_state.user_state['is_premium']:
+        current_time = datetime.now()
+        expiry_time = current_time + timedelta(days=30)
         
-        if st.form_submit_button("送信"):
-            if auth_type == "新規登録":
-                success, message = register_user(email, password)
-            else:
-                success, message = login_user(email, password)
+        file_info = {
+            'pdf_name': pdf_file.name,
+            'excel_path': excel_file,
+            'created_at': current_time,
+            'expires_at': expiry_time
+        }
+        
+        st.session_state.user_state['stored_files'].append(file_info)
+
+# UI部分
+def show_auth_ui():
+    """認証UI"""
+    st.sidebar.markdown("### アカウント")
+    
+    if not st.session_state.user_state['is_logged_in']:
+        with st.sidebar.form("auth_form"):
+            email = st.text_input("メールアドレス")
+            password = st.text_input("パスワード", type="password")
+            submit = st.form_submit_button("ログイン/登録")
             
-            if success:
-                st.success(message)
-                st.session_state['show_auth'] = False
+            if submit and email and password:
+                # 実際の実装ではデータベースでの認証が必要
+                st.session_state.user_state['is_logged_in'] = True
+                st.session_state.user_state['email'] = email
                 st.experimental_rerun()
-            else:
-                st.error(message)
+    else:
+        st.sidebar.markdown(f"ログイン中: {st.session_state.user_state['email']}")
+        if not st.session_state.user_state['is_premium']:
+            if st.sidebar.button("🌟 プレミアムに登録"):
+                checkout_url = create_checkout_session(st.session_state.user_state['email'])
+                if checkout_url:
+                    st.markdown(f"[決済ページへ進む]({checkout_url})")
+        
+        if st.sidebar.button("ログアウト"):
+            st.session_state.user_state = {
+                'is_logged_in': False,
+                'is_premium': False,
+                'email': None,
+                'stored_files': [],
+                'conversion_count': 0
+            }
+            st.experimental_rerun()
 
-# ファイルアップロード
-st.markdown('<div class="upload-area">', unsafe_allow_html=True)
-uploaded_files = st.file_uploader("", type=['pdf'], accept_multiple_files=True)
-if not uploaded_files:
-    st.markdown('📄 クリックまたはドラッグ＆ドロップでPDFファイルを選択（最大3つまで）')
-elif len(uploaded_files) > 3:
-    st.error("⚠️ 無料版では一度に3つまでのファイルしか変換できません")
-st.markdown('</div>', unsafe_allow_html=True)
-
-# SEO対策のためのメタ情報
-st.markdown("""
-<!-- SEO対策用メタ情報 -->
-<div style="display:none">
-    PDF Excel 変換 無料 表 テーブル 一括変換 データ抽出 オンライン ツール
-    PDFからExcelへの無料変換ツール 表形式データ抽出 高精度変換
-</div>
-""", unsafe_allow_html=True)
-
-# 複数ファイル処理部分
-if uploaded_files:
-    for i, uploaded_file in enumerate(uploaded_files[:3]):  # 最大3つまでに制限
-        with st.spinner(f'PDFファイル {i+1}/{len(uploaded_files)} を処理中...'):
+# メイン処理部分
+def process_files(uploaded_files):
+    """ファイル処理のメイン関数"""
+    max_files = 10 if st.session_state.user_state['is_premium'] else 3
+    
+    if len(uploaded_files) > max_files:
+        st.error(f"⚠️ 一度に変換できるのは最大{max_files}ファイルまでです")
+        return
+    
+    if not st.session_state.user_state['is_premium'] and st.session_state.user_state['conversion_count'] >= 3:
+        st.error("⚠️ 無料プランの変換可能回数を超えました。プレミアムにアップグレードすると無制限で変換できます。")
+        return
+    
+    for uploaded_file in uploaded_files:
+        with st.spinner(f'{uploaded_file.name} を処理中...'):
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
                     tmp_file.write(uploaded_file.getvalue())
@@ -293,9 +164,19 @@ if uploaded_files:
                         st.dataframe(df, use_container_width=True)
                         
                         # Excelファイル作成
-                        excel_file = f'converted_data_{i+1}.xlsx'
+                        excel_file = f'converted_{uploaded_file.name}.xlsx'
                         df.to_excel(excel_file, index=False)
                         
+                        # プレミアム機能
+                        if st.session_state.user_state['is_premium']:
+                            store_conversion(uploaded_file, excel_file)
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button("📧 メールで受け取る"):
+                                    send_excel_email(st.session_state.user_state['email'], excel_file)
+                        else:
+                            st.session_state.user_state['conversion_count'] += 1
+
                         with open(excel_file, 'rb') as f:
                             st.download_button(
                                 label=f"📥 {uploaded_file.name} をダウンロード",
@@ -312,6 +193,40 @@ if uploaded_files:
             finally:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
+
+# メインアプリケーション
+show_auth_ui()
+
+if not st.session_state.user_state['is_premium']:
+    st.markdown("""
+    ### 🌟 プレミアム機能 (月額500円)
+    - ✨ 無制限の変換回数
+    - 📦 一度に10ファイルまで変換可能
+    - 📧 変換したファイルをメールで受信
+    - 💾 30日間のファイル保存
+    - 🚫 広告非表示
+    """)
+
+# ファイルアップロード
+uploaded_files = st.file_uploader(
+    "PDFファイルを選択",
+    type=['pdf'],
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    process_files(uploaded_files)
+
+# 保存されたファイルの表示（プレミアムユーザーのみ）
+if st.session_state.user_state['is_premium'] and st.session_state.user_state['stored_files']:
+    st.markdown("### 保存されたファイル")
+    for file in st.session_state.user_state['stored_files']:
+        if datetime.now() < file['expires_at']:
+            st.download_button(
+                f"📥 {file['pdf_name']}",
+                data=open(file['excel_path'], 'rb'),
+                file_name=f"converted_{file['pdf_name']}.xlsx"
+            )
 
 # テーブル認識精度強化のための関数
 def extract_table_with_enhanced_recognition(page):
