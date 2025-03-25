@@ -378,14 +378,20 @@ def create_document_type_buttons():
     if 'selected_document_type' not in st.session_state:
         st.session_state.selected_document_type = None
     
-    # ボタンのスタイル
+    # ラジオボタンをボタン風にするスタイル
     button_style = """
         <style>
-        div[data-testid="stHorizontalBlock"] > div:first-child button,
-        div[data-testid="stHorizontalBlock"] > div:nth-child(2) button {
+        /* ラジオボタンを非表示 */
+        div[data-testid="stRadio"] > div > div > label > div:first-child {
+            display: none;
+        }
+        
+        /* ラベルをボタン風にスタイリング */
+        div[data-testid="stRadio"] label {
             width: 100%;
-            min-height: 60px;  /* ボタンの高さを1.5倍に */
+            min-height: 60px;
             margin: 8px 0;
+            padding: 10px 15px;
             border: 2px solid #e0e0e0;
             border-radius: 8px;
             background: linear-gradient(145deg, #ffffff 0%, #f5f5f5 100%);
@@ -393,28 +399,39 @@ def create_document_type_buttons():
             color: #333;
             transition: all 0.3s ease;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
         }
         
-        div[data-testid="stHorizontalBlock"] button:hover {
+        /* ホバー時のスタイル */
+        div[data-testid="stRadio"] label:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 8px rgba(0,0,0,0.15);
             border-color: #2196F3;
             background: linear-gradient(145deg, #f5f5f5 0%, #e3f2fd 100%);
         }
         
-        .selected-button {
+        /* 選択時のスタイル */
+        div[data-testid="stRadio"] label[data-checked="true"] {
             border-color: #2196F3 !important;
             background: linear-gradient(145deg, #e3f2fd 0%, #bbdefb 100%) !important;
             color: #1565C0 !important;
             box-shadow: 0 4px 8px rgba(33,150,243,0.2) !important;
         }
+        
+        /* 2カラムレイアウト */
+        div[data-testid="stRadio"] > div {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
         </style>
     """
     st.markdown(button_style, unsafe_allow_html=True)
     
-    # ボタンを2列で配置
-    col1, col2 = st.columns(2)
-    
+    # ドキュメントタイプの定義
     document_types = {
         "見積書": "estimate",
         "請求書": "invoice",
@@ -425,31 +442,21 @@ def create_document_type_buttons():
         "その他": "other"
     }
     
-    selected = False
-    for i, (label, value) in enumerate(document_types.items()):
-        with col1 if i % 2 == 0 else col2:
-            # 選択状態に応じてクラスを追加
-            button_class = "selected-button" if st.session_state.selected_document_type == value else ""
-            button_html = f"""
-                <button 
-                    class="{button_class}"
-                    onclick="this.blur();"
-                    data-value="{value}"
-                >
-                    {label}
-                </button>
-            """
-            if st.button(
-                label,
-                key=f"doc_type_{value}",
-                help=f"{label}を選択",
-                use_container_width=True  # use_column_widthの代わりに使用
-            ):
-                st.session_state.selected_document_type = value
-                selected = True
-                st.experimental_rerun()  # 選択状態を即時反映
+    # ラジオボタンで選択
+    selected_label = st.radio(
+        "書類の種類",
+        options=list(document_types.keys()),
+        key="doc_type_radio",
+        label_visibility="collapsed",  # ラベルを非表示
+        horizontal=True,  # 水平配置
+        index=None if st.session_state.selected_document_type is None else 
+              list(document_types.values()).index(st.session_state.selected_document_type)
+    )
     
-    if not selected and st.session_state.selected_document_type is None:
+    # 選択状態の更新
+    if selected_label is not None:
+        st.session_state.selected_document_type = document_types[selected_label]
+    else:
         st.warning("書類の種類を選択してください")
         return None
     
