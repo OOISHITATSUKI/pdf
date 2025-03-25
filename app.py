@@ -129,14 +129,41 @@ def check_conversion_limit():
     else:
         return st.session_state.user_state['daily_conversions'] < 3
 
+def extract_text_with_settings(page):
+    """より正確なテキスト抽出のための設定"""
+    return page.extract_text(
+        x_tolerance=3,  # 文字間の水平方向の許容値
+        y_tolerance=3,  # 文字間の垂直方向の許容値
+        layout=True,    # レイアウトを考慮
+        keep_blank_chars=False,  # 空白文字を除去
+        use_text_flow=True,  # テキストの流れを考慮
+        horizontal_ltr=True,  # 左から右への読み取り
+        vertical_ttb=True,    # 上から下への読み取り
+        extra_attrs=['fontname', 'size']  # フォント情報も取得
+    )
+
 def analyze_document_structure(pdf_path):
     """PDFの構造を解析する"""
     try:
         with pdfplumber.open(pdf_path) as pdf:
             page = pdf.pages[0]
             
-            # まずテーブルの抽出を試みる
-            tables = page.extract_tables()
+            # テーブルの検出を試みる
+            tables = page.extract_tables(
+                table_settings={
+                    "vertical_strategy": "text",
+                    "horizontal_strategy": "text",
+                    "intersection_y_tolerance": 10,
+                    "intersection_x_tolerance": 10,
+                    "snap_y_tolerance": 3,
+                    "snap_x_tolerance": 3,
+                    "join_y_tolerance": 3,
+                    "join_x_tolerance": 3,
+                    "edge_min_length": 3,
+                    "min_words_vertical": 3,
+                    "min_words_horizontal": 1
+                }
+            )
             
             if tables:
                 # テーブルが見つかった場合の処理
@@ -144,14 +171,23 @@ def analyze_document_structure(pdf_path):
                 for table in tables:
                     for row in table:
                         if any(row):  # 空でない行のみ処理
-                            items.append({
-                                'text': ' '.join(str(cell) for cell in row if cell),
-                                'type': 'table_row'
-                            })
+                            cleaned_row = [
+                                str(cell).strip() if cell is not None else ""
+                                for cell in row
+                            ]
+                            if any(cleaned_row):  # 空でない行のみ追加
+                                items.append({
+                                    'text': ' '.join(cleaned_row),
+                                    'type': 'table_row'
+                                })
             else:
                 # テーブルが見つからない場合はテキストとして抽出
-                texts = page.extract_text().split('\n')
-                items = [{'text': text, 'type': 'text'} for text in texts if text.strip()]
+                text = extract_text_with_settings(page)
+                items = [
+                    {'text': line.strip(), 'type': 'text'}
+                    for line in text.split('\n')
+                    if line.strip()
+                ]
             
             return {'items': items}
             
@@ -190,11 +226,13 @@ def extract_exact_layout(pdf_path):
         with pdfplumber.open(pdf_path) as pdf:
             page = pdf.pages[0]
             
-            # テキストの抽出（位置情報付き）
+            # テキストの抽出（より詳細な設定で）
             texts = page.extract_words(
-                keep_blank_chars=True,
+                keep_blank_chars=False,
                 x_tolerance=1,
-                y_tolerance=1
+                y_tolerance=1,
+                extra_attrs=['fontname', 'size'],
+                use_text_flow=True
             )
             
             # 罫線情報の取得
@@ -202,26 +240,36 @@ def extract_exact_layout(pdf_path):
             horizontals = sorted([e for e in edges if e['orientation'] == 'horizontal'], key=lambda x: x['y0'])
             verticals = sorted([e for e in edges if e['orientation'] == 'vertical'], key=lambda x: x['x0'])
             
-            # テーブルの抽出
-            tables = page.extract_tables()
+            # テーブルの抽出（より詳細な設定で）
+            tables = page.extract_tables(
+                table_settings={
+                    "vertical_strategy": "text",
+                    "horizontal_strategy": "text",
+                    "intersection_y_tolerance": 10,
+                    "intersection_x_tolerance": 10,
+                    "snap_y_tolerance": 3,
+                    "snap_x_tolerance": 3,
+                    "join_y_tolerance": 3,
+                    "join_x_tolerance": 3,
+                    "edge_min_length": 3,
+                    "min_words_vertical": 3,
+                    "min_words_horizontal": 1
+                }
+            )
             
-            # セルの位置情報を計算
-            cells = []
-            if tables:
-                for table in tables:
-                    for i, row in enumerate(table):
-                        for j, cell in enumerate(row):
-                            if cell:
-                                cells.append({
-                                    'text': str(cell),
-                                    'row': i,
-                                    'col': j
-                                })
+            # テキストの前処理
+            processed_texts = []
+            for text in texts:
+                # cidの除去
+                cleaned_text = re.sub(r'\(cid:\d+\)', '', text['text'])
+                if cleaned_text.strip():
+                    text['text'] = cleaned_text.strip()
+                    processed_texts.append(text)
             
             return {
-                'texts': texts,
+                'texts': processed_texts,
                 'edges': {'horizontal': horizontals, 'vertical': verticals},
-                'cells': cells
+                'tables': tables
             }
             
     except Exception as e:
