@@ -567,40 +567,17 @@ def get_document_type_label(doc_type):
     return type_map.get(doc_type, "不明な書類")
 
 def display_conversion_count():
-    """変換回数の表示（フロントエンド側）"""
-    try:
-        user_id = st.session_state.get('user_id')
-        daily_count = tracker.get_daily_count(user_id)
-        limit = tracker.get_plan_limit(user_id)
-        
-        if limit == float('inf'):
-            st.markdown("📊 **変換回数制限**: 無制限")
-        else:
-            remaining = limit - daily_count
-            plan_name = PLAN_NAMES.get(
-                st.session_state.get('user_plan', 'free_guest'),
-                "無料プラン（未登録）"
-            )
-            
-            # 変換回数の表示を1箇所に統一
-            st.markdown(f"📊 **本日の残り変換回数**: {remaining} / {limit}回 ({plan_name})")
-            
-            # 警告表示
-            if remaining <= 1:
-                st.warning("⚠️ 本日の変換回数が残りわずかです。プランをアップグレードすると変換回数が増加します。")
-                
-                # プラン別の案内
-                if not user_id:
-                    st.info("💡 アカウント登録で、本日の残り回数が2回増加します！")
-                elif st.session_state.get('user_plan') == 'free_registered':
-                    st.info("💡 $5プランにアップグレードで、1日1000回まで変換可能になります！")
-                elif st.session_state.get('user_plan') == 'premium_basic':
-                    st.info("💡 $20プランにアップグレードで、無制限で変換可能になります！")
+    """変換回数を表示"""
+    if 'conversion_count' not in st.session_state:
+        st.session_state.conversion_count = 0
     
-    except Exception as e:
-        st.error(f"変換回数の取得中にエラーが発生しました: {str(e)}")
-        # エラー時はデフォルト値を表示
-        st.markdown("📊 **本日の残り変換回数**: 3 / 3回 (無料プラン（未登録）)")
+    if st.session_state.logged_in:
+        if st.session_state.get('is_premium', False):
+            st.info("本日の変換回数：無制限（有料プラン）")
+        else:
+            st.info(f"本日の変換回数：{st.session_state.conversion_count} / 5回（無料プラン・登録済）")
+    else:
+        st.info(f"本日の変換回数：{st.session_state.conversion_count} / 3回（未登録）")
 
 def create_document_type_buttons():
     """ドキュメントタイプ選択ボタンを作成"""
@@ -796,27 +773,71 @@ def create_login_section():
     
     if not st.session_state.logged_in:
         st.markdown("### 🔐 ログイン")
-        username = st.text_input("ユーザー名")
-        password = st.text_input("パスワード", type="password")
+        with st.form("login_form"):
+            username = st.text_input("ユーザー名")
+            password = st.text_input("パスワード", type="password")
+            submitted = st.form_submit_button("ログイン")
+            
+            if submitted:
+                if username and password:
+                    # ここにログイン認証のロジックを実装
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.success("ログイン成功！")
+                    st.rerun()
+                else:
+                    st.error("ユーザー名とパスワードを入力してください。")
         
-        if st.button("ログイン"):
-            if username and password:
-                # ここにログイン認証のロジックを実装
-                st.session_state.logged_in = True
-                st.success("ログイン成功！")
-                st.rerun()
-            else:
-                st.error("ユーザー名とパスワードを入力してください。")
+        st.markdown("---")
+        st.markdown("### 📝 新規登録")
+        if st.button("アカウントを作成", type="primary"):
+            st.session_state.show_register = True
+            st.rerun()
     else:
         st.markdown("### 👤 ログイン済み")
+        st.markdown(f"ようこそ、{st.session_state.username}さん！")
         if st.button("ログアウト"):
             st.session_state.logged_in = False
+            st.session_state.username = None
             st.rerun()
+
+def create_register_section():
+    """新規登録セクションを作成"""
+    st.markdown("### 📝 新規アカウント登録")
+    with st.form("register_form"):
+        new_username = st.text_input("ユーザー名")
+        new_password = st.text_input("パスワード", type="password")
+        confirm_password = st.text_input("パスワード（確認）", type="password")
+        submitted = st.form_submit_button("登録")
+        
+        if submitted:
+            if new_username and new_password and confirm_password:
+                if new_password == confirm_password:
+                    # ここに新規登録のロジックを実装
+                    st.success("アカウントが作成されました！")
+                    st.session_state.show_register = False
+                    st.rerun()
+                else:
+                    st.error("パスワードが一致しません。")
+            else:
+                st.error("すべての項目を入力してください。")
+    
+    if st.button("ログイン画面に戻る"):
+        st.session_state.show_register = False
+        st.rerun()
 
 def main():
     """メイン関数"""
     create_hero_section()
-    create_login_section()
+    
+    # 新規登録画面の表示制御
+    if 'show_register' not in st.session_state:
+        st.session_state.show_register = False
+    
+    if st.session_state.show_register:
+        create_register_section()
+    else:
+        create_login_section()
     
     # 変換回数の表示（最上部）
     display_conversion_count()
