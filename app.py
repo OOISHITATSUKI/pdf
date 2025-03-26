@@ -509,10 +509,12 @@ def process_pdf_with_ocr(image_bytes, document_type):
         return None
 
 def process_pdf(uploaded_file, document_type=None, document_date=None):
+    """PDFを処理してExcelに変換する関数"""
     try:
         if st.session_state.processing_pdf:
             return None
         st.session_state.processing_pdf = True
+
         # 変換回数制限のチェック
         user_id = st.session_state.get('user_id')
         if not check_conversion_limit(user_id):
@@ -521,7 +523,11 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
 
         # PDFを画像に変換
         pdf_bytes = uploaded_file.getvalue()
-        images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1)
+        try:
+            images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1)
+        except Exception as e:
+            st.error("PDFの読み込みに失敗しました。Popplerがインストールされているか確認してください。")
+            return None
         
         if not images:
             st.error("PDFの読み込みに失敗しました。")
@@ -539,9 +545,13 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
             text_content = process_pdf_with_ocr(img_bytes, document_type)
         else:
             # 無料ユーザーはpdfplumberを使用
-            with pdfplumber.open(uploaded_file) as pdf:
-                page = pdf.pages[0]
-                text_content = page.extract_text()
+            try:
+                with pdfplumber.open(uploaded_file) as pdf:
+                    page = pdf.pages[0]
+                    text_content = page.extract_text()
+            except Exception as e:
+                st.error("PDFのテキスト抽出に失敗しました。画像のみのPDFや、スキャンされたPDFの場合は有料プランでのOCR処理をお試しください。")
+                return None
 
         if not text_content:
             st.error("このPDFは読み取れませんでした。画像のみのPDFや、スキャンされたPDFの場合は有料プランでのOCR処理をお試しください。")
@@ -708,6 +718,26 @@ def create_document_type_buttons():
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 10px;
+        }
+
+        /* 変換ボタンのスタイル */
+        .stButton > button {
+            width: 100%;
+            padding: 15px 30px;
+            background: linear-gradient(145deg, #2196F3 0%, #1976D2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 18px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(33,150,243,0.2);
+        }
+
+        .stButton > button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(33,150,243,0.3);
+            background: linear-gradient(145deg, #1976D2 0%, #1565C0 100%);
         }
         </style>
     """
