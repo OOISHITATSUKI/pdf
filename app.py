@@ -789,6 +789,30 @@ def create_hero_section():
     - 🎨 見やすいレイアウトで出力
     """)
 
+def create_login_section():
+    """ログインセクションを作成"""
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+    
+    if not st.session_state.logged_in:
+        st.markdown("### 🔐 ログイン")
+        username = st.text_input("ユーザー名")
+        password = st.text_input("パスワード", type="password")
+        
+        if st.button("ログイン"):
+            if username and password:
+                # ここにログイン認証のロジックを実装
+                st.session_state.logged_in = True
+                st.success("ログイン成功！")
+                st.rerun()
+            else:
+                st.error("ユーザー名とパスワードを入力してください。")
+    else:
+        st.markdown("### 👤 ログイン済み")
+        if st.button("ログアウト"):
+            st.session_state.logged_in = False
+            st.rerun()
+
 def main():
     """メイン関数"""
     create_hero_section()
