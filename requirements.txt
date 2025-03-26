@@ -1,15 +1,15 @@
 # 基本的なライブラリ
 streamlit==1.32.0
 pdfplumber==0.10.3
+pdf2image==1.17.0
 pandas==2.2.1
 numpy==1.26.4
 Pillow==10.2.0
 openpyxl==3.1.2
 
 # OCR関連
+google-cloud-vision==3.5.0
 pytesseract==0.3.10
-pdf2image==1.17.0
-google-cloud-vision==3.5.0  # 有料プラン用
 
 # 画像処理
 opencv-python-headless==4.9.0.80
@@ -35,8 +35,11 @@ psycopg2-binary==2.9.9  # PostgreSQL用
 # キャッシュ・セッション管理
 redis==5.0.1
 
-# 追加されたパッケージ
+# 環境変数管理
 python-dotenv==1.0.1
 
 # PDFプレビュー用
-poppler-utils==0.1.0  # Popplerの依存関係 
+poppler-utils==0.1.0  # Popplerの依存関係
+
+# その他
+requests==2.31.0 
