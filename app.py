@@ -776,6 +776,19 @@ def create_preview(uploaded_file):
         st.error(f"プレビューの生成中にエラーが発生しました: {str(e)}")
         return None
 
+def create_hero_section():
+    """ヒーローセクションを作成"""
+    st.title("📄 PDF to Excel 変換ツール")
+    st.markdown("""
+    PDFファイルを簡単にExcelファイルに変換できます。
+    以下の機能を提供しています：
+    
+    - 📝 請求書、納品書、見積書などのPDFをExcelに変換
+    - 🔍 OCR機能による文字認識
+    - 📊 表形式のデータを自動でExcelに整形
+    - 🎨 見やすいレイアウトで出力
+    """)
+
 def main():
     """メイン関数"""
     create_hero_section()
