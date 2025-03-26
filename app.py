@@ -29,6 +29,10 @@ from dotenv import load_dotenv
 # 環境変数の読み込み
 load_dotenv()
 
+# Popplerのパス設定
+if os.path.exists('/usr/local/bin/pdftoppm'):
+    os.environ['PATH'] = f"/usr/local/bin:{os.environ['PATH']}"
+
 # ページ設定（必ず最初に実行）
 st.set_page_config(
     page_title="PDF to Excel 変換ツール",
@@ -527,10 +531,12 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
             images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1)
         except Exception as e:
             st.error("PDFの読み込みに失敗しました。Popplerがインストールされているか確認してください。")
+            st.session_state.processing_pdf = False
             return None
         
         if not images:
             st.error("PDFの読み込みに失敗しました。")
+            st.session_state.processing_pdf = False
             return None
 
         # 画像をバイトデータに変換
@@ -551,10 +557,12 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
                     text_content = page.extract_text()
             except Exception as e:
                 st.error("PDFのテキスト抽出に失敗しました。画像のみのPDFや、スキャンされたPDFの場合は有料プランでのOCR処理をお試しください。")
+                st.session_state.processing_pdf = False
                 return None
 
         if not text_content:
             st.error("このPDFは読み取れませんでした。画像のみのPDFや、スキャンされたPDFの場合は有料プランでのOCR処理をお試しください。")
+            st.session_state.processing_pdf = False
             return None
 
         # Excelファイルの作成
@@ -643,6 +651,7 @@ def display_conversion_count():
                 "無料プラン（未登録）"
             )
             
+            # 変換回数の表示を1箇所に統一
             st.markdown(f"📊 **本日の残り変換回数**: {remaining} / {limit}回 ({plan_name})")
             
             # 警告表示
@@ -660,7 +669,7 @@ def display_conversion_count():
     except Exception as e:
         st.error(f"変換回数の取得中にエラーが発生しました: {str(e)}")
         # エラー時はデフォルト値を表示
-        st.markdown("📊 **本日の残り変換回数**: 3 / 3回 (無料プラン)")
+        st.markdown("📊 **本日の残り変換回数**: 3 / 3回 (無料プラン（未登録）)")
 
 def create_document_type_buttons():
     """ドキュメントタイプ選択ボタンを作成"""
@@ -787,27 +796,31 @@ def create_footer():
         st.markdown("[お問い合わせ](/contact)")
 
 def create_preview(uploaded_file):
-    """PDFのプレビューを生成する関数"""
+    """PDFのプレビューを生成"""
     try:
-        if uploaded_file is not None:
-            # PDFをバイトデータとして読み込み
-            pdf_bytes = uploaded_file.getvalue()
+        # PDFを画像に変換
+        pdf_bytes = uploaded_file.getvalue()
+        try:
+            images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1)
+            if not images:
+                st.error("PDFの読み込みに失敗しました。")
+                return None
             
-            # PDF2Imageを使用して最初のページを画像に変換
-            images = convert_from_bytes(
-                pdf_bytes,
-                first_page=1,
-                last_page=1,
-                dpi=150,
-                fmt='PNG'
-            )
+            # 画像をバイトデータに変換
+            img_byte_arr = io.BytesIO()
+            images[0].save(img_byte_arr, format='PNG')
+            img_bytes = img_byte_arr.getvalue()
             
-            if images:
-                # 最初のページの画像をバイトストリームに変換
-                img_byte_arr = io.BytesIO()
-                images[0].save(img_byte_arr, format='PNG')
-                return img_byte_arr.getvalue()
-        return None
+            # プレビューを表示
+            st.image(img_bytes, caption="PDFプレビュー", use_column_width=True)
+            return True
+            
+        except Exception as e:
+            st.error(f"プレビューの生成中にエラーが発生しました: {str(e)}")
+            if "poppler" in str(e).lower():
+                st.info("💡 Popplerのインストールが必要です。以下のコマンドでインストールできます：\n```\nbrew install poppler\n```")
+            return None
+            
     except Exception as e:
         st.error(f"プレビューの生成中にエラーが発生しました: {str(e)}")
         return None
