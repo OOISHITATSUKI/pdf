@@ -302,135 +302,38 @@ def get_daily_conversion_count(user_id: str) -> int:
     finally:
         conn.close()
 
-def increment_conversion_count(user_id: str) -> bool:
-    """変換回数のインクリメント（バックエンド側）"""
+def check_and_increment_conversion_count(user_id: Optional[str] = None) -> bool:
+    """変換回数をチェックしてインクリメント"""
     try:
-        # 再度制限チェック
-        if not check_conversion_limit(user_id):
-            return False
-            
-        return tracker.increment_count(user_id)
-    except Exception as e:
-        st.error(f"変換回数の更新中にエラーが発生しました: {str(e)}")
-        return False
-
-def check_conversion_limit(user_id: Optional[str] = None) -> bool:
-    """変換制限のチェック（バックエンド側）"""
-    try:
+        # 現在の変換回数と制限を取得
         daily_count = tracker.get_daily_count(user_id)
         limit = tracker.get_plan_limit(user_id)
         
-        # デバッグ情報の出力
-        st.write(f"現在の変換回数: {daily_count}/{limit}")
-        
-        return daily_count < limit
-    except Exception as e:
-        st.error(f"変換制限のチェック中にエラーが発生しました: {str(e)}")
+        # 制限チェック
+        if daily_count >= limit:
+            st.error("本日の変換回数制限に達しました。プランをアップグレードするか、明日以降に再度お試しください。")
+            return False
+            
+        # カウントをインクリメント
+        if tracker.increment_count(user_id):
+            st.session_state.conversion_success = True
+            st.success("変換が完了しました！")
+            
+            # 画面の更新（最大1回まで）
+            current_time = datetime.now()
+            if (current_time - st.session_state.last_rerun_time).total_seconds() > 1:
+                st.session_state.rerun_count += 1
+                if st.session_state.rerun_count <= 1:
+                    st.session_state.last_rerun_time = current_time
+                    st.experimental_rerun()
+            return True
+            
+        st.error("変換回数の更新に失敗しました。")
         return False
-
-# セッション状態の初期化
-if 'user_id' not in st.session_state:
-    st.session_state.user_id = str(datetime.now().timestamp())
-
-# データベースの初期化を実行
-init_db()
-
-def create_hero_section():
-    """ヒーローセクションを作成"""
-    st.title("PDF to Excel 変換ツール")
-    st.write("PDFファイルをかんたんにExcelに変換できます。")
-    st.write("請求書、決算書、納品書など、帳票をレイアウトそのままで変換可能。")
-    st.write("ブラウザ上で完結し、安心・安全にご利用いただけます。")
-
-def create_login_section():
-    """ログインセクションを作成"""
-    with st.sidebar:
-        st.subheader("ログイン")
-        email = st.text_input("メールアドレス")
-        password = st.text_input("パスワード", type="password")
-        if st.button("ログイン"):
-            # ログイン処理（実装予定）
-            pass
         
-        st.markdown("---")
-        st.subheader("新規登録")
-        if st.button("アカウントを作成"):
-            # 新規登録処理（実装予定）
-            pass
-
-def create_preview_section(uploaded_file):
-    """プレビューセクションを作成"""
-    st.subheader("プレビュー")
-    if uploaded_file is not None:
-        preview_image = create_preview(uploaded_file)
-        if preview_image is not None:
-            st.image(preview_image, use_container_width=True)
-
-def create_upload_section():
-    """アップロードセクションを作成"""
-    st.subheader("ファイルをアップロード")
-    
-    # 残り変換回数の表示
-    daily_count = get_daily_conversion_count(st.session_state.user_id)
-    remaining = 3 - daily_count  # 基本は3回
-    st.markdown(f"📊 本日の残り変換回数：{remaining}/3回")
-    
-    # ドキュメントタイプの選択
-    document_type = st.selectbox(
-        "ドキュメントの種類を選択",
-        ["請求書", "見積書", "納品書", "確定申告書", "その他"]
-    )
-    
-    # 日付入力
-    document_date = st.date_input(
-        "書類の日付",
-        value=None,
-        help="YYYY/MM/DD形式で入力してください"
-    )
-    
-    # ファイルアップロード
-    uploaded_file = st.file_uploader(
-        "クリックまたはドラッグ&ドロップでPDFファイルを選択",
-        type=['pdf'],
-        help="ファイルサイズの制限: 200MB"
-    )
-    
-    st.info("💡 無料プランでは1ページ目のみ変換されます。全ページ変換は有料プランでご利用いただけます。")
-    
-    if uploaded_file is not None:
-        if st.button("Excelに変換する"):
-            if not st.session_state.processing_pdf:  # 処理中でない場合のみ実行
-                if check_conversion_limit(st.session_state.user_id):
-                    try:
-                        excel_data = process_pdf(uploaded_file, document_type, document_date)
-                        # 変換履歴を保存
-                        save_conversion_history(
-                            st.session_state.user_id,
-                            document_type,
-                            document_date.strftime('%Y-%m-%d') if document_date else None,
-                            uploaded_file.name,
-                            "success"
-                        )
-                        st.download_button(
-                            label="Excelファイルをダウンロード",
-                            data=excel_data,
-                            file_name="converted.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                    except Exception as e:
-                        st.error(f"処理中にエラーが発生しました: {str(e)}")
-                        # エラー履歴を保存
-                        save_conversion_history(
-                            st.session_state.user_id,
-                            document_type,
-                            document_date.strftime('%Y-%m-%d') if document_date else None,
-                            uploaded_file.name,
-                            f"error: {str(e)}"
-                        )
-                else:
-                    st.error("本日の変換回数制限に達しました。プランをアップグレードすると、より多くの変換が可能です。")
-    
-    return uploaded_file
+    except Exception as e:
+        st.error(f"変換回数の処理中にエラーが発生しました: {str(e)}")
+        return False
 
 def get_user_plan(user_id):
     """ユーザーのプランを取得する関数"""
@@ -474,9 +377,9 @@ def process_pdf_with_ocr(image_bytes, document_type):
         # APIキーの取得
         api_key = os.getenv('GOOGLE_VISION_API_KEY')
         if not api_key:
-            st.error("APIキーが設定されていません。")
+            st.error("Google Cloud Vision APIの設定が見つかりません。")
             return None
-
+            
         # APIエンドポイントの設定
         url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
         headers = {"Content-Type": "application/json"}
@@ -488,26 +391,24 @@ def process_pdf_with_ocr(image_bytes, document_type):
                 "features": [{"type": "DOCUMENT_TEXT_DETECTION"}]
             }]
         }
-
+        
         # APIリクエストの送信
         response = requests.post(url, headers=headers, json=data)
         
         # レスポンスの確認
         if response.status_code != 200:
-            st.error(f"APIリクエストが失敗しました: {response.status_code}")
+            st.error(f"OCR処理に失敗しました。")
             return None
-
+            
         # レスポンスの解析
         result = response.json()
-        
-        # テキストの抽出
         if 'responses' in result and result['responses']:
             text_annotations = result['responses'][0].get('textAnnotations', [])
             if text_annotations:
                 return text_annotations[0].get('description', '')
-        
+                
         return None
-
+        
     except Exception as e:
         st.error(f"OCR処理中にエラーが発生しました: {str(e)}")
         return None
@@ -516,14 +417,14 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
     """PDFを処理してExcelに変換する関数"""
     try:
         if st.session_state.processing_pdf:
-            return None
+            return None, None
         st.session_state.processing_pdf = True
 
         # 変換回数制限のチェック
         user_id = st.session_state.get('user_id')
-        if not check_conversion_limit(user_id):
-            st.error("本日の変換回数制限に達しました。プランをアップグレードするか、明日以降に再度お試しください。")
-            return None
+        if not check_and_increment_conversion_count(user_id):
+            st.session_state.processing_pdf = False
+            return None, None
 
         # PDFを画像に変換
         pdf_bytes = uploaded_file.getvalue()
@@ -532,95 +433,125 @@ def process_pdf(uploaded_file, document_type=None, document_date=None):
         except Exception as e:
             st.error("PDFの読み込みに失敗しました。Popplerがインストールされているか確認してください。")
             st.session_state.processing_pdf = False
-            return None
+            return None, None
         
         if not images:
             st.error("PDFの読み込みに失敗しました。")
             st.session_state.processing_pdf = False
-            return None
+            return None, None
 
         # 画像をバイトデータに変換
         img_byte_arr = io.BytesIO()
         images[0].save(img_byte_arr, format='PNG')
         img_bytes = img_byte_arr.getvalue()
 
-        # ユーザープランに応じてOCR処理を選択
-        user_plan = get_user_plan(user_id)
-        if user_plan in ['premium_basic', 'premium_pro']:
-            # 有料ユーザーはGoogle Cloud Vision APIを使用
-            text_content = process_pdf_with_ocr(img_bytes, document_type)
-        else:
-            # 無料ユーザーはpdfplumberを使用
-            try:
-                with pdfplumber.open(uploaded_file) as pdf:
-                    page = pdf.pages[0]
-                    text_content = page.extract_text()
-            except Exception as e:
-                st.error("PDFのテキスト抽出に失敗しました。画像のみのPDFや、スキャンされたPDFの場合は有料プランでのOCR処理をお試しください。")
-                st.session_state.processing_pdf = False
-                return None
+        # まずpdfplumberでテキスト抽出を試みる
+        try:
+            with pdfplumber.open(uploaded_file) as pdf:
+                page = pdf.pages[0]
+                text_content = page.extract_text()
+                if text_content and len(text_content.strip()) > 0:
+                    return create_excel_file(text_content, document_type, document_date)
+        except Exception:
+            pass  # pdfplumberでの抽出に失敗した場合、OCRを試みる
 
+        # テキスト抽出に失敗した場合、OCRを使用
+        text_content = process_pdf_with_ocr(img_bytes, document_type)
         if not text_content:
-            st.error("このPDFは読み取れませんでした。画像のみのPDFや、スキャンされたPDFの場合は有料プランでのOCR処理をお試しください。")
+            st.error("PDFからテキストを抽出できませんでした。")
             st.session_state.processing_pdf = False
-            return None
+            return None, None
 
-        # Excelファイルの作成
-        wb = Workbook()
-        ws = wb.active
-
-        # シート名の設定
-        sheet_name = f"{get_document_type_label(document_type)}_{document_date.strftime('%Y-%m-%d') if document_date else 'unknown_date'}"
-        ws.title = sheet_name[:31]
-
-        # テキストをExcelに書き込み
-        for i, line in enumerate(text_content.split('\n'), 1):
-            ws.cell(row=i, column=1, value=line)
-
-        # 列幅の自動調整
-        for column_cells in ws.columns:
-            max_length = 0
-            column = column_cells[0].column
-            for cell in column_cells:
-                if cell.value:
-                    try:
-                        if not isinstance(cell, MergedCell):
-                            length = len(str(cell.value))
-                            max_length = max(max_length, length)
-                    except:
-                        pass
-            adjusted_width = max(max_length + 2, 8) * 1.2
-            ws.column_dimensions[get_column_letter(column)].width = adjusted_width
-
-        # 一時ファイルとして保存
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
-            wb.save(temp_excel.name)
-            with open(temp_excel.name, 'rb') as f:
-                excel_data = f.read()
-
-        # 一時ファイルの削除
-        os.unlink(temp_excel.name)
-
-        # 変換成功時にカウントをインクリメント
-        if increment_conversion_count(user_id):
-            st.session_state.conversion_success = True
-            st.success("変換が完了しました！")
-            current_time = datetime.now()
-            if (current_time - st.session_state.last_rerun_time).total_seconds() > 1:
-                st.session_state.rerun_count += 1
-                if st.session_state.rerun_count <= 1:  # 最大1回まで
-                    st.session_state.last_rerun_time = current_time
-                    st.experimental_rerun()
-        else:
-            st.error("変換回数の更新に失敗しました。")
-
-        return excel_data
+        return create_excel_file(text_content, document_type, document_date)
 
     except Exception as e:
         st.error(f"PDFの処理中にエラーが発生しました: {str(e)}")
-        return None
+        return None, None
     finally:
         st.session_state.processing_pdf = False
+
+def create_excel_file(text_content, document_type, document_date=None):
+    """Excelファイルを作成して保存"""
+    try:
+        # ドキュメントタイプの日本語名を取得
+        doc_type_names = {
+            "estimate": "見積書",
+            "invoice": "請求書",
+            "delivery": "納品書",
+            "receipt": "領収書",
+            "financial": "決算書",
+            "tax_return": "確定申告書",
+            "other": "その他"
+        }
+        doc_type_ja = doc_type_names.get(document_type, "その他")
+        
+        # 日付の処理
+        if document_date:
+            date_str = document_date.strftime("%Y%m%d")
+        else:
+            date_str = datetime.now().strftime("%Y%m%d")
+        
+        # Excelワークブックの作成
+        wb = Workbook()
+        ws = wb.active
+        ws.title = f"{doc_type_ja}_{date_str}"
+        
+        # フォントとスタイルの設定
+        default_font = Font(name='Yu Gothic', size=11)
+        header_font = Font(name='Yu Gothic', size=12, bold=True)
+        title_font = Font(name='Yu Gothic', size=14, bold=True)
+        
+        # 基本的なセルスタイル
+        normal_alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+        center_alignment = Alignment(horizontal='center', vertical='center')
+        
+        # 罫線スタイル
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # テキストを行に分割
+        lines = text_content.split('\n')
+        
+        # 行の高さと列幅の初期設定
+        ws.row_dimensions[1].height = 30
+        for col in range(1, 10):
+            ws.column_dimensions[get_column_letter(col)].width = 15
+        
+        # データの書き込みと書式設定
+        for i, line in enumerate(lines, 1):
+            ws.cell(row=i, column=1, value=line)
+            cell = ws[f"A{i}"]
+            cell.font = default_font
+            cell.alignment = normal_alignment
+            cell.border = thin_border
+            
+            # 金額と思われる部分は右寄せに
+            if any(char in line for char in ['¥', '円', '税']):
+                cell.alignment = Alignment(horizontal='right', vertical='center')
+        
+        # タイトル行の特別な書式設定
+        if len(lines) > 0:
+            title_cell = ws['A1']
+            title_cell.font = title_font
+            title_cell.alignment = center_alignment
+            title_cell.fill = PatternFill(start_color="E3F2FD", end_color="E3F2FD", fill_type="solid")
+        
+        # メモリ上にExcelファイルを保存
+        excel_buffer = io.BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        # ファイル名の生成
+        file_name = f"{doc_type_ja}_{date_str}.xlsx"
+        
+        return excel_buffer, file_name
+    except Exception as e:
+        st.error(f"Excelファイルの作成中にエラーが発生しました: {str(e)}")
+        return None, None
 
 def get_document_type_label(doc_type):
     """ドキュメントタイプのコードから表示用ラベルを取得"""
@@ -695,31 +626,30 @@ def create_document_type_buttons():
             padding: 10px 15px;
             border: 2px solid #e0e0e0;
             border-radius: 8px;
-            background: linear-gradient(145deg, #ffffff 0%, #f5f5f5 100%);
+            background: #ffffff;
             font-size: 16px;
             color: #333;
-            transition: all 0.3s ease;
+            transition: all 0.2s ease;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
+            user-select: none;
         }
         
         /* ホバー時のスタイル */
         div[data-testid="stRadio"] label:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
             border-color: #2196F3;
-            background: linear-gradient(145deg, #f5f5f5 0%, #e3f2fd 100%);
+            box-shadow: 0 4px 8px rgba(33,150,243,0.2);
         }
         
         /* 選択時のスタイル */
         div[data-testid="stRadio"] label[data-checked="true"] {
-            border-color: #2196F3 !important;
-            background: linear-gradient(145deg, #e3f2fd 0%, #bbdefb 100%) !important;
-            color: #1565C0 !important;
-            box-shadow: 0 4px 8px rgba(33,150,243,0.2) !important;
+            border-color: #2196F3;
+            background: #e3f2fd;
+            color: #1565C0;
+            box-shadow: 0 4px 8px rgba(33,150,243,0.2);
         }
         
         /* 2カラムレイアウト */
@@ -741,12 +671,33 @@ def create_document_type_buttons():
             font-weight: bold;
             transition: all 0.3s ease;
             box-shadow: 0 4px 6px rgba(33,150,243,0.2);
+            margin-top: 20px;
         }
 
         .stButton > button:hover {
             transform: translateY(-2px);
             box-shadow: 0 6px 12px rgba(33,150,243,0.3);
             background: linear-gradient(145deg, #1976D2 0%, #1565C0 100%);
+        }
+
+        /* エラーメッセージのスタイル */
+        .stAlert {
+            background: #ffebee;
+            color: #c62828;
+            padding: 1rem;
+            border-radius: 8px;
+            border-left: 4px solid #c62828;
+            margin: 1rem 0;
+        }
+
+        /* 成功メッセージのスタイル */
+        .stSuccess {
+            background: #e8f5e9;
+            color: #2e7d32;
+            padding: 1rem;
+            border-radius: 8px;
+            border-left: 4px solid #2e7d32;
+            margin: 1rem 0;
         }
         </style>
     """
@@ -861,26 +812,24 @@ def main():
         if uploaded_file is not None and document_type is not None:
             if st.button("Excelに変換する"):
                 if not st.session_state.processing_pdf:  # 処理中でない場合のみ実行
-                    if check_conversion_limit(st.session_state.get('user_id')):
+                    if check_and_increment_conversion_count(st.session_state.get('user_id')):
                         try:
-                            excel_data = process_pdf(uploaded_file, document_type, document_date)
+                            excel_data, file_name = process_pdf(uploaded_file, document_type, document_date)
                             # 変換履歴を保存
                             save_conversion_history(
                                 st.session_state.get('user_id'),
                                 document_type,
                                 document_date.strftime('%Y-%m-%d') if document_date else None,
-                                uploaded_file.name,
+                                file_name,
                                 "success"
                             )
-                            # 変換回数を更新
-                            increment_conversion_count(st.session_state.get('user_id'))
                             # 変換回数の表示を更新
                             display_conversion_count()
                             
                             st.download_button(
                                 label="Excelファイルをダウンロード",
                                 data=excel_data,
-                                file_name=f"{get_document_type_label(document_type)}_{document_date.strftime('%Y-%m-%d') if document_date else 'unknown_date'}.xlsx",
+                                file_name=file_name,
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             )
                         except Exception as e:
@@ -890,7 +839,7 @@ def main():
                                 st.session_state.get('user_id'),
                                 document_type,
                                 document_date.strftime('%Y-%m-%d') if document_date else None,
-                                uploaded_file.name,
+                                file_name,
                                 f"error: {str(e)}"
                             )
                     else:
