@@ -19,6 +19,7 @@ google-auth==2.28.1
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 google-api-python-client==2.120.0  # Google Drive API用
+aiohttp==3.9.3  # 非同期HTTPクライアント/サーバー
 
 # 決済関連（有料プラン用）
 stripe==8.4.0
