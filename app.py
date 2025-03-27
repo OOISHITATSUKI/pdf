@@ -1,4 +1,5 @@
 import streamlit as st
+from utils.session import init_session_state  # セッション管理関数のインポート
 import pdfplumber
 from pdf2image import convert_from_bytes
 import pandas as pd
@@ -51,6 +52,8 @@ st.set_page_config(
 )
 
 # セッション状態の初期化
+init_session_state()  # セッション状態を初期化
+
 if 'rerun_count' not in st.session_state:
     st.session_state.rerun_count = 0
 if 'last_rerun_time' not in st.session_state:

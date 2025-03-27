@@ -27,6 +27,48 @@ The following data were extracted from the AFM files:
 ###  END Verbatim copy of the license part
 
 # flake8: noqa
+from typing import Dict
+
+
+def convert_font_metrics(path: str) -> None:
+    """Convert an AFM file to a mapping of font metrics.
+
+    See below for the output.
+    """
+    fonts = {}
+    with open(path, "r") as fileinput:
+        for line in fileinput.readlines():
+            f = line.strip().split(" ")
+            if not f:
+                continue
+            k = f[0]
+            if k == "FontName":
+                fontname = f[1]
+                props = {"FontName": fontname, "Flags": 0}
+                chars: Dict[int, int] = {}
+                fonts[fontname] = (props, chars)
+            elif k == "C":
+                cid = int(f[1])
+                if 0 <= cid and cid <= 255:
+                    width = int(f[4])
+                    chars[cid] = width
+            elif k in ("CapHeight", "XHeight", "ItalicAngle", "Ascender", "Descender"):
+                k = {"Ascender": "Ascent", "Descender": "Descent"}.get(k, k)
+                props[k] = float(f[1])
+            elif k in ("FontName", "FamilyName", "Weight"):
+                k = {"FamilyName": "FontFamily", "Weight": "FontWeight"}.get(k, k)
+                props[k] = f[1]
+            elif k == "IsFixedPitch":
+                if f[1].lower() == "true":
+                    props["Flags"] = 64
+            elif k == "FontBBox":
+                props[k] = tuple(map(float, f[1:5]))
+        print("# -*- python -*-")
+        print("FONT_METRICS = {")
+        for (fontname, (props, chars)) in fonts.items():
+            print(" {!r}: {!r},".format(fontname, (props, chars)))
+        print("}")
+
 
 FONT_METRICS = {
     "Courier": (
@@ -4405,3 +4447,18 @@ FONT_METRICS = {
         },
     ),
 }
+
+# Aliases defined in implementation note 62 in Appecix H. related to section 5.5.1
+# (Type 1 Fonts) in the PDF Reference.
+FONT_METRICS["Arial"] = FONT_METRICS["Helvetica"]
+FONT_METRICS["Arial,Italic"] = FONT_METRICS["Helvetica-Oblique"]
+FONT_METRICS["Arial,Bold"] = FONT_METRICS["Helvetica-Bold"]
+FONT_METRICS["Arial,BoldItalic"] = FONT_METRICS["Helvetica-BoldOblique"]
+FONT_METRICS["CourierNew"] = FONT_METRICS["Courier"]
+FONT_METRICS["CourierNew,Italic"] = FONT_METRICS["Courier-Oblique"]
+FONT_METRICS["CourierNew,Bold"] = FONT_METRICS["Courier-Bold"]
+FONT_METRICS["CourierNew,BoldItalic"] = FONT_METRICS["Courier-BoldOblique"]
+FONT_METRICS["TimesNewRoman"] = FONT_METRICS["Times-Roman"]
+FONT_METRICS["TimesNewRoman,Italic"] = FONT_METRICS["Times-Italic"]
+FONT_METRICS["TimesNewRoman,Bold"] = FONT_METRICS["Times-Bold"]
+FONT_METRICS["TimesNewRoman,BoldItalic"] = FONT_METRICS["Times-BoldItalic"]
