@@ -15,7 +15,8 @@ SQLALCHEMY_DATABASE_URL = os.getenv(
 
 # エンジンの作成
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
 )
 
 # セッションの作成
